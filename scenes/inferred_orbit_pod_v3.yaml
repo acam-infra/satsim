@@ -1,0 +1,35 @@
+schema: satsim.scene/v1
+name: inferred_orbit_pod_v3
+story: |
+  四颗星组成同一轨道面上的紧凑计算舱段，不是全星座。
+  一次对地过境被压进 compress_horizon_s，请求在这段里到达；
+  最密时隙之后 offset_s 触发功率帽换位（换位前 node 2 被压住，换位后 node 0 被压住）。
+  环上 10 Gbps 的抽象 ISL 同时扛着两对优先背景流，汇合在 1→2， offered 超过链路口径。
+  换位把驻留留在变慢的节点上。立刻改放置能把换位后的 TPOT 拉回来，这是迁移的收益。
+  随意迁移则把当时的整段 KV 送上环：到对角有两条等长路，流量走剩余带宽更大的那条，byte·hop 按实际跳数计。
+not_modeled:
+  - 真实星历和六根数
+  - 时变 ISL
+  - 全星座规模
+  - 热容/食季 ODE
+  - STAC L1 的真实到达时刻（这里是均匀压进 horizon 的合成簇）
+  - 上游全引擎跑出的 goodput 数字（本文件不引用、不复写那些数）
+mirrors:
+  cfg:
+    nodes: 4
+    topology: ring
+    arrival_window_s: 900.0
+    net.link_gbps: 10.0
+    background.gbps_per_node: 2.75
+    background.strict_priority: true
+    gpu.kv_gib: 24.0
+    workload.p_long: 0.2
+    cost.timeout_s: 120.0
+  spec:
+    t_swap.anchor: max_cluster
+    t_swap.offset_s: 40
+    t_swap.P_cap: 80
+    trace.kind: synthetic_pass
+    trace.compress_horizon_s: 60
+    trace.pack_window_s: 900
+    trace.target_n: 88

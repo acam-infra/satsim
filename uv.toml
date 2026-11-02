@@ -1,0 +1,5 @@
+# 解析依赖时只用这一处索引，不并列官方 PyPI。
+[[index]]
+name = "tsinghua"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true

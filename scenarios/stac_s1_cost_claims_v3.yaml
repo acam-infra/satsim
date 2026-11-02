@@ -1,0 +1,68 @@
+# C1 迁移有收益：免费改放置 vs 换位后不动。
+# C2 随意迁移的链路代价：整段 KV 无预算地上 ISL，记 byte·hop。
+# 不读 STAC jsonl。synthetic_pass 是压缩过境的替身，见 scenes/。
+name: stac_s1_cost_claims_v3
+base: construct_s1.yaml
+trace:
+  kind: synthetic_pass
+  compress_horizon_s: 60
+  pack_window_s: 900
+  target_n: 88
+  jitter_s: 0.05
+  token_pad:
+    mode: floor
+    long_out: 16000
+    long_pin: 8000
+    short_out: 200
+    short_pin: 500
+t_swap:
+  anchor: max_cluster
+  offset_s: 40
+  P_cap: 80
+overrides:
+  arrival_window_s: 900.0
+  background.gbps_per_node: 2.75
+  background.strict_priority: true
+  net.link_gbps: 10.0
+  gpu.kv_gib: 24.0
+policies:
+  static_late:
+    route: late
+  free_mig:
+    route: late
+    migrate: full
+    hysteresis: 0.15
+    cfg:
+      cost.mode: free
+  cost_mig:
+    route: late
+    migrate: full
+    hysteresis: 0.15
+    cfg:
+      cost.mode: full
+  cost_net_only:
+    route: late
+    migrate: full
+    hysteresis: 0.15
+    cfg:
+      cost.mode: net
+  free_mig_nobg:
+    route: late
+    migrate: full
+    hysteresis: 0.15
+    cfg:
+      cost.mode: free
+      background.gbps_per_node: 0
+  cost_mig_nobg:
+    route: late
+    migrate: full
+    hysteresis: 0.15
+    cfg:
+      cost.mode: full
+      background.gbps_per_node: 0
+seeds: [1, 2, 3, 4, 5]
+slo:
+  tpot_slo: 0.032
+evidence: sim_synthetic_pass_power_ISL
+metadata:
+  scene: ../scenes/inferred_orbit_pod_v3.yaml
