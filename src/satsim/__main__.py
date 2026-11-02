@@ -5,9 +5,9 @@ import argparse
 import json
 from pathlib import Path
 
-from satsim.claims import claim_summary
-from satsim.sim import make_pass, run_one
-from satsim.spec import SpecError, apply_t_swap, resolve_spec
+from satsim.input.spec import SpecError, apply_t_swap, resolve_spec
+from satsim.method.sim import make_pass, run_one
+from satsim.output.claims import claim_summary
 
 
 def run_spec(spec_path: Path, outdir: Path | None = None) -> dict:
@@ -73,20 +73,23 @@ def main(argv: list[str] | None = None) -> None:
     print(f"{payload['name']}  T_SWAP={payload['T_SWAP']:.4g}  evidence={payload['evidence']}")
     for pol, row in claims["policies"].items():
         print(
-            f"  {pol:16} good_long={_fmt(row['good_long_mean'])}"
+            f"  {pol:22} good_long={_fmt(row['good_long_mean'])}"
             f"  goodput={_fmt(row['goodput_tok_s_mean'])}"
             f"  byteHop_GB={_fmt(row['mig_byteHop_GB_mean'])}"
             f"  abort={_fmt(row['mig_abort_mean'])}"
         )
     c1, c2 = claims["C1"], claims["C2"]
     print(
-        f"C1 good_long {c1['static_good_long']:.4g}→{c1['free_good_long']:.4g}"
-        f"  gain={c1['goodput_gain_vs_static']:.4g}"
+        f"C1 首次 {c1['first_good_long']:.4g} → 运行时重分配 {c1['rebalance_good_long']:.4g}"
+        f"  gain={c1['goodput_gain']:.4g}"
     )
     print(
-        f"C2 casual byteHop_GB={c2['casual_byteHop_GB']:.4g}"
-        f"  free byteHop_GB={c2['free_byteHop_GB']:.4g}"
-        f"  net_tracks_full={c2['net_tracks_full']}"
+        f"C2 cap={c2['link_cap_gbps']:.4g} Gbps"
+        f"  flows/link={c2['max_flows_on_link']:.4g}"
+        f"  上链路 goodput {c2['rebalance_link_goodput_tok_s']:.4g}"
+        f"  不上链路 {c2['rebalance_goodput_tok_s']:.4g}"
+        f"  drop={c2['goodput_drop']:.4g}"
+        f"  nobg_drop={c2['nobg']['goodput_drop']:.4g}"
     )
     print(f"wrote {dest / 'summary.json'}")
 

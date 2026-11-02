@@ -17,7 +17,7 @@ from dataclasses import dataclass
 
 import simpy
 
-from satsim.spec import SpecError
+from satsim.input.spec import SpecError
 
 ROUND_S = 0.1
 MAX_OUT = 2
@@ -112,22 +112,6 @@ def make_pass(trace: dict, p_long: float, seed: int) -> tuple[list[Req], float, 
             )
         )
     return reqs, anchor, count
-
-
-def ring_routes(n: int, s: int, d: int) -> list[list[tuple[int, int]]]:
-    if s == d:
-        return [[]]
-    routes = []
-    for step in (1, -1):
-        path = []
-        x = s
-        while x != d:
-            y = (x + step) % n
-            path.append((x, y))
-            x = y
-        routes.append(path)
-    hop = min(len(p) for p in routes)
-    return [p for p in routes if len(p) == hop]
 
 
 def _bfs_path(n: int, s: int, d: int) -> list[tuple[int, int]]:
@@ -269,12 +253,8 @@ class Net:
         dts = [f.remaining / f.rate for f in self.flows if f.rate > 1e-9 and f.remaining < float("inf")]
         return min(dts) if dts else None
 
-    def residual(self, edge: tuple[int, int]) -> float:
-        used = 0.0
-        for f in self.flows:
-            if f.priority == 0 and edge in f.path:
-                used += f.demand
-        return max(0.0, self.cap - used)
+    def flows_on(self, edge: tuple[int, int]) -> int:
+        return sum(1 for f in self.flows if edge in f.path)
 
 
 def net_proc(env: simpy.Environment, net: Net):
@@ -302,7 +282,7 @@ class World:
         self.hyst = float(policy.get("hysteresis") or 0.15)
         self.net = Net(env, cfg)
         self.nodes: list[list[Req]] = [[] for _ in range(self.n)]
-        self.acc = dict(mig=0, abort=0, mig_bytes=0.0)
+        self.acc = dict(mig=0, abort=0, mig_bytes=0.0, max_flows_on_link=0)
         self.bpt = kv_bytes_per_tok(cfg["model"])
         self._install_background()
 
@@ -372,8 +352,8 @@ class World:
             self.poke_node(req.node)
 
     def pick_path(self, s: int, d: int) -> list[tuple[int, int]]:
-        routes = ring_routes(self.n, s, d)
-        return max(routes, key=lambda p: min((self.net.residual(e) for e in p), default=0.0))
+        # Same shortest path as the background. Do not step around a full link.
+        return _bfs_path(self.n, s, d)
 
     def try_move(self) -> None:
         if not self.migrate:
@@ -410,6 +390,9 @@ class World:
             self._commit(req, src, dst, 0.0)
             return
         path = self.pick_path(src, dst)
+        if path:
+            sharing = max(self.net.flows_on(e) for e in path) + 1
+            self.acc["max_flows_on_link"] = max(self.acc["max_flows_on_link"], sharing)
         flow = self.net.add(path, nbytes, priority=1, demand=float("inf"))
         timeout = float(self.cfg["cost"]["timeout_s"])
         yield flow.done | self.env.timeout(timeout)
@@ -513,6 +496,8 @@ def run_one(cfg: dict, policy: dict, seed: int, trace: dict, t_swap_s: float, sl
         mig_abort=world.acc["abort"],
         mig_GB=world.acc["mig_bytes"] / 1e9,
         mig_byteHop_GB=world.net.bytehop / 1e9,
+        link_cap_gbps=float(cfg["net"]["link_gbps"]),
+        max_flows_on_link=world.acc["max_flows_on_link"],
         T_SWAP=t_swap_s,
         max_cluster_t=anchor,
         max_cluster_n=cluster_n,

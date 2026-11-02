@@ -1,6 +1,6 @@
-# C1 迁移有收益：免费改放置 vs 换位后不动。
-# C2 随意迁移的链路代价：整段 KV 无预算地上 ISL，记 byte·hop。
-# 不读 STAC jsonl。synthetic_pass 是压缩过境的替身，见 scenes/。
+# 首次分配解决不了换位。运行时重分配才行。
+# 上链路的重分配和背景流抢同一条带宽上限。
+# 不读 STAC jsonl。synthetic_pass 是压缩过境的替身，见 input/scenes/。
 name: stac_s1_cost_claims_v3
 base: construct_s1.yaml
 trace:
@@ -26,34 +26,34 @@ overrides:
   net.link_gbps: 10.0
   gpu.kv_gib: 24.0
 policies:
-  static_late:
+  first:
     route: late
-  free_mig:
+  rebalance:
     route: late
     migrate: full
     hysteresis: 0.15
     cfg:
       cost.mode: free
-  cost_mig:
+  rebalance_link:
     route: late
     migrate: full
     hysteresis: 0.15
     cfg:
       cost.mode: full
-  cost_net_only:
+  rebalance_link_net:
     route: late
     migrate: full
     hysteresis: 0.15
     cfg:
       cost.mode: net
-  free_mig_nobg:
+  rebalance_nobg:
     route: late
     migrate: full
     hysteresis: 0.15
     cfg:
       cost.mode: free
       background.gbps_per_node: 0
-  cost_mig_nobg:
+  rebalance_link_nobg:
     route: late
     migrate: full
     hysteresis: 0.15

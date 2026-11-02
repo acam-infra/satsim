@@ -27,20 +27,20 @@ OVERRIDE_REASONS = {
 
 # The six v3 policies. A new name is a new claim arm and is not admitted.
 POLICY_REASONS = {
-    "static_late": "换位后不迁移，C1 收益的基线。",
-    "free_mig": "立刻改放置、KV 不上链路，用来看迁移本身有没有收益。",
-    "cost_mig": "随意把整段 KV 送上 ISL，不设字节预算，用来量链路代价。",
-    "cost_net_only": "同样整段上链路，但不计内存半支；核对代价是不是来自链路。",
-    "free_mig_nobg": "关掉背景后的免费迁移，收益不该靠背景造出来。",
-    "cost_mig_nobg": "关掉背景后仍把整段 KV 送上链路，代价还在。",
+    "first": "首次分配：到来时放一次，换位后不动。",
+    "rebalance": "运行时重分配：换位后再放，KV 不上链路。",
+    "rebalance_link": "同一次运行时重分配，整段 KV 上链路。",
+    "rebalance_link_net": "同样上链路，用来核对代价是不是来自链路。",
+    "rebalance_nobg": "关掉背景后再做运行时重分配。",
+    "rebalance_link_nobg": "关掉背景后仍把整段 KV 送上链路。",
 }
 
 _COST_MODE = {
-    "free_mig": "free",
-    "cost_mig": "full",
-    "cost_net_only": "net",
-    "free_mig_nobg": "free",
-    "cost_mig_nobg": "full",
+    "rebalance": "free",
+    "rebalance_link": "full",
+    "rebalance_link_net": "net",
+    "rebalance_nobg": "free",
+    "rebalance_link_nobg": "full",
 }
 
 MAX_SEEDS = 8
@@ -175,9 +175,9 @@ def validate_policy(name: str, pol: dict) -> None:
         raise SpecError(f"{name}: route 只准入 late")
     mig = pol.get("migrate", "none")
     cfg = pol.get("cfg", {})
-    if name == "static_late":
+    if name == "first":
         if mig not in ("none", None) or cfg:
-            raise SpecError("static_late 不能带迁移或 cfg")
+            raise SpecError("first 是首次分配，换位后不再动")
         return
     if mig != "full":
         raise SpecError(f"{name}: migrate 只准入 full")
