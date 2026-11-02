@@ -7,8 +7,9 @@ from satsim.method.policies.link_cost.full import FullLinkCost
 from satsim.method.policies.link_cost.net import NetLinkCost
 from satsim.method.policies.link_cost.off import OffLinkCost
 from satsim.method.policies.schedulers.place_once import PlaceOnceScheduler
-from satsim.method.policies.schedulers.rebalance_local import RebalanceLocalScheduler
-from satsim.method.policies.schedulers.rebalance_over_link import RebalanceOverLinkScheduler
+from satsim.method.policies.schedulers.rebalance_free import RebalanceFreeScheduler
+from satsim.method.policies.schedulers.rebalance_ours import RebalanceOursScheduler
+from satsim.method.policies.schedulers.rebalance_random import RebalanceRandomScheduler
 
 
 @dataclass
@@ -20,10 +21,12 @@ class PolicyBundle:
 def _scheduler(kind: str, *, hysteresis: float | None):
     if kind == "place_once":
         return PlaceOnceScheduler()
-    if kind == "rebalance_local":
-        return RebalanceLocalScheduler(hysteresis=float(hysteresis if hysteresis is not None else 0.15))
-    if kind == "rebalance_over_link":
-        return RebalanceOverLinkScheduler(hysteresis=float(hysteresis if hysteresis is not None else 0.15))
+    if kind == "rebalance_free":
+        return RebalanceFreeScheduler(hysteresis=float(hysteresis if hysteresis is not None else 0.15))
+    if kind == "rebalance_random":
+        return RebalanceRandomScheduler()
+    if kind == "rebalance_ours":
+        return RebalanceOursScheduler()
     raise ValueError(f"未知 scheduler: {kind}")
 
 

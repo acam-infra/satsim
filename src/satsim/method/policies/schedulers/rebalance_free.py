@@ -1,12 +1,14 @@
-"""初次分配 + 换位后再分配；配合 link_cost=off（KV 不上链路）。"""
+"""实时再分配 · 无消耗：换位后启发式迁到更好节点；须配 link_cost=off。"""
 from __future__ import annotations
 
 from satsim.method.policies.schedulers._placement import place_by_iter_time
 from satsim.method.policies.schedulers._select import pick_migration
 
 
-class RebalanceLocalScheduler:
-    id = "rebalance_local"
+class RebalanceFreeScheduler:
+    """无链路代价的运行时重分配（free / no-cost）。"""
+
+    id = "rebalance_free"
 
     def __init__(self, hysteresis: float = 0.15):
         self.hysteresis = float(hysteresis)

@@ -37,12 +37,20 @@ _Avoid_: 第二套仿真
 _Avoid_: STAC 复现, GPU 实测
 
 **全局调度器 (scheduler)**:
-一个策略同时覆盖初次分配 `place` 与再分配 `maybe_rebalance`。YAML 写 `scheduler` + `link_cost`（+ `hysteresis` / `knobs`）。
-_Avoid_: 并列 placement/rebalance 两套钩子, route/migrate/cfg
+一个策略同时覆盖初次分配 `place` 与再分配 `maybe_rebalance`。
+论文三档：`place_once`｜`rebalance_free`（无消耗）｜`rebalance_random` / `rebalance_ours`（有消耗）。
+_Avoid_: 并列 placement/rebalance 钩子；把 ours 写成已实现最优
+
+**无消耗再分配 (rebalance_free)**:
+换位后可再分配，迁移不付链路代价（link_cost=off），用启发式迁到更好节点。
+_Avoid_: 与上链路策略混名
+
+**有消耗再分配**:
+迁移走链路。`rebalance_random` 为基线；`rebalance_ours` 为待解决问题。
+_Avoid_: 用空实现冒充 ours 最优
 
 **link_cost: off|full|net**:
-迁移是否上链路及如何计代价。与 scheduler 有准入搭配（如 place_once 只配 off）。
-_Avoid_: 把 off 写成布尔（YAML 须加引号）
+是否上链路及如何计代价；与 scheduler 准入搭配。YAML 中 `off` 须加引号。
 
 **线下到达生成**:
 `trace.kind: synthetic_pass` 或 `poisson`；仿真开始前生成完整请求序列再回放。

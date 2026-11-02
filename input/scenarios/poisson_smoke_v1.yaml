@@ -1,5 +1,4 @@
 # 泊松到达冒烟
-# .venv/bin/satsim configs/poisson_smoke_v1.yaml
 name: poisson_smoke_v1
 base: construct_s1.yaml
 trace:
@@ -27,8 +26,8 @@ policies:
   place_once:
     scheduler: place_once
     link_cost: "off"
-  rebalance_local:
-    scheduler: rebalance_local
+  rebalance_free:
+    scheduler: rebalance_free
     link_cost: "off"
     hysteresis: 0.15
 seeds: [1, 2]

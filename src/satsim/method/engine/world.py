@@ -1,6 +1,7 @@
 """世界状态：节点驻留、链路、背景流；通过接口做放置/迁移。"""
 from __future__ import annotations
 
+import random
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 
@@ -184,7 +185,7 @@ def net_proc(env: simpy.Environment, net: Net):
 
 
 class World:
-    def __init__(self, env: simpy.Environment, cfg: dict, policy: dict, t_swap: float, bundle=None):
+    def __init__(self, env: simpy.Environment, cfg: dict, policy: dict, t_swap: float, bundle=None, seed: int = 0):
         self.env = env
         self.cfg = cfg
         self.policy = policy
@@ -200,6 +201,7 @@ class World:
             bundle = bundle_from_policy(policy)
         self.scheduler = bundle.scheduler
         self.link_cost = bundle.link_cost
+        self.rng = random.Random(int(seed) ^ 0xC0FFEE)
         self._install_background()
 
     def _install_background(self) -> None:

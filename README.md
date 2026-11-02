@@ -22,7 +22,7 @@ uv sync
 
 `input/scenes/inferred_orbit_pod_v3.yaml` 把已经生效的旋钮说成紧凑轨面舱段。它镜像 spec，不提供第二套物理。拿它当入口会直接拒绝。
 
-新覆盖路径、`grid`、非 `ring`、非严格优先级，加载时拒绝。策略写全局 `scheduler` + `link_cost`（关背景用 `knobs.background.gbps_per_node: 0`）。引擎只调 `scheduler.place` / `scheduler.maybe_rebalance`。准入表在 `src/satsim/input/schema.py`。C1/C2 按 scheduler×link_cost×nobg 选臂。`trace.kind` 准入 `synthetic_pass` 与 `poisson`。
+新覆盖路径、`grid`、非 `ring`、非严格优先级，加载时拒绝。论文三档调度：`place_once`｜`rebalance_free`（无消耗）｜`rebalance_random`/`rebalance_ours`（有消耗；ours=TODO）。YAML 写 `scheduler` + `link_cost`。C1/C2 按档位选臂。`trace.kind`：`synthetic_pass` / `poisson`。
 
 ## 插件框架（进行中）
 
@@ -30,7 +30,7 @@ uv sync
 
 ## 阅读路径（方法）
 
-1. YAML：`scheduler`（`place_once` | `rebalance_local` | `rebalance_over_link`）+ `link_cost`
+1. YAML：`scheduler`（`place_once` | `rebalance_free` | `rebalance_random` | `rebalance_ours`）+ `link_cost`
 2. `method/registry.py` → 一个 `Scheduler` + `LinkCostModel`
 3. `method/engine`：到达回放时 `place`；控制周期 `maybe_rebalance`
 4. `output/claims.py`：按 scheduler/link_cost 出 C1/C2

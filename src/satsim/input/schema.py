@@ -17,16 +17,18 @@ OVERRIDE_REASONS = {
 
 LINK_COST_TO_MODE = {"off": "free", "full": "full", "net": "net"}
 
-SCHEDULER_IDS = {"place_once", "rebalance_local", "rebalance_over_link"}
+SCHEDULER_IDS = {"place_once", "rebalance_free", "rebalance_random", "rebalance_ours"}
 LINK_COST_IDS = {"off", "full", "net"}
 KNOB_KEYS = {"background.gbps_per_node"}
 
-# scheduler 与 link_cost 的默认搭配（准入时校验）
+# 论文三档：初次 / 无消耗再分配 / 有消耗再分配（random|ours）
 SCHEDULER_LINK_COST = {
     "place_once": {"off"},
-    "rebalance_local": {"off"},
-    "rebalance_over_link": {"full", "net"},
+    "rebalance_free": {"off"},
+    "rebalance_random": {"full", "net"},
+    "rebalance_ours": {"full", "net"},
 }
+SCHEDULER_NEEDS_HYSTERESIS = {"rebalance_free"}
 
 MAX_SEEDS = 8
 
@@ -216,13 +218,12 @@ def validate_policy(name: str, pol: dict) -> None:
             f"{name}: scheduler={pol['scheduler']} 时 link_cost 只准入 {sorted(allowed_lc)}"
         )
 
-    if pol["scheduler"] == "place_once":
-        if "hysteresis" in pol:
-            raise SpecError(f"{name}: place_once 不需要 hysteresis")
-    else:
+    if pol["scheduler"] in SCHEDULER_NEEDS_HYSTERESIS:
         h = pol.get("hysteresis")
         if not isinstance(h, (int, float)) or not 0 < float(h) <= 1:
             raise SpecError(f"{name}: hysteresis 需要在 (0, 1]")
+    elif "hysteresis" in pol:
+        raise SpecError(f"{name}: {pol['scheduler']} 不需要 hysteresis")
 
     knobs = pol.get("knobs") or {}
     if not isinstance(knobs, dict):
@@ -232,10 +233,8 @@ def validate_policy(name: str, pol: dict) -> None:
         raise SpecError(f"{name}: knobs 只准入 {sorted(KNOB_KEYS)}，多了 {sorted(extra)}")
 
     applied = dict(knobs)
-    if pol["scheduler"] != "place_once":
-        applied["cost.mode"] = LINK_COST_TO_MODE[pol["link_cost"]]
-    else:
-        applied.pop("cost.mode", None)
+    # link_cost → cfg cost.mode（off→free）
+    applied["cost.mode"] = LINK_COST_TO_MODE[pol["link_cost"]]
     pol["knobs"] = applied
 
 

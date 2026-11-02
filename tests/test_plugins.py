@@ -1,4 +1,4 @@
-"""全局 scheduler、泊松生成、configs 入口。"""
+"""全局 scheduler（论文三档）、泊松、configs。"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -41,26 +41,26 @@ def test_configs_symlink_runs():
     assert payload["claims"]["C1"]["goodput_gain"] > 0
 
 
-def test_bundle_from_scheduler_policy():
+def test_bundle_costly_random_and_ours_todo():
     _, _, jobs = resolve_spec(MAIN)
-    name, pol, c2, seed = next(j for j in jobs if j[0] == "rebalance_over_link")
-    bundle = bundle_from_policy(pol)
-    assert pol["scheduler"] == "rebalance_over_link"
-    assert pol["link_cost"] == "full"
-    assert bundle.scheduler.id == "rebalance_over_link"
-    assert bundle.link_cost.mode == "full"
+    by_name = {j[0]: j[1] for j in jobs}
+    b_rand = bundle_from_policy(by_name["rebalance_random"])
+    assert b_rand.scheduler.id == "rebalance_random"
+    assert b_rand.link_cost.mode == "full"
+    b_ours = bundle_from_policy(by_name["rebalance_ours"])
+    assert b_ours.scheduler.id == "rebalance_ours"
+    assert getattr(b_ours.scheduler, "TODO", "")
 
 
 def test_poisson_generate_and_run():
-    spec, cfg, jobs = resolve_spec(POISSON)
+    spec, cfg, _jobs = resolve_spec(POISSON)
     assert spec["trace"]["kind"] == "poisson"
-    reqs, anchor, count = generate_arrivals(spec["trace"], float(cfg["workload"]["p_long"]), 1)
+    reqs, _anchor, _count = generate_arrivals(spec["trace"], float(cfg["workload"]["p_long"]), 1)
     assert isinstance(reqs[0], Request)
-    assert len(reqs) >= 1
     payload = run_spec(POISSON, outdir=None)
     assert payload["T_SWAP"] == pytest.approx(40.0)
     assert "place_once" in payload["claims"]["policies"]
-    assert "rebalance_local" in payload["claims"]["policies"]
+    assert "rebalance_free" in payload["claims"]["policies"]
 
 
 def test_placement_rebalance_fields_refused(tmp_path: Path):

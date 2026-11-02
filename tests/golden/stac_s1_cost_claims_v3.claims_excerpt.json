@@ -8,9 +8,10 @@
   },
   "C2": {
     "link_cap_gbps": 10.0,
-    "goodput_drop": 0.2991026919,
-    "nobg_goodput_drop": 0.0,
-    "net_tracks_link": true,
+    "goodput_drop": 0.2392821535,
+    "nobg_goodput_drop": 0.2093718843,
+    "nobg_abort_mean": 0.0,
     "rebalance_link_abort_mean": 9.2
-  }
+  },
+  "ours_status": "todo"
 }

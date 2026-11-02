@@ -26,10 +26,11 @@ def _excerpt(payload: dict) -> dict:
         "C2": {
             "link_cap_gbps": c2["link_cap_gbps"],
             "goodput_drop": round(c2["goodput_drop"], 10),
-            "nobg_goodput_drop": c2["nobg"]["goodput_drop"],
-            "net_tracks_link": c2["net_tracks_link"],
+            "nobg_goodput_drop": round(c2["nobg"]["goodput_drop"], 10),
+            "nobg_abort_mean": c2["nobg"]["rebalance_link_abort_mean"],
             "rebalance_link_abort_mean": c2["rebalance_link_abort_mean"],
         },
+        "ours_status": payload["claims"]["ours"]["status"],
     }
 
 
@@ -43,6 +44,7 @@ def test_main_claims_match_golden():
     assert got["C1"]["goodput_gain"] == pytest.approx(want["C1"]["goodput_gain"], rel=0, abs=1e-9)
     assert got["C2"]["link_cap_gbps"] == pytest.approx(want["C2"]["link_cap_gbps"])
     assert got["C2"]["goodput_drop"] == pytest.approx(want["C2"]["goodput_drop"], rel=0, abs=1e-9)
-    assert got["C2"]["nobg_goodput_drop"] == pytest.approx(want["C2"]["nobg_goodput_drop"], abs=1e-12)
-    assert got["C2"]["net_tracks_link"] is want["C2"]["net_tracks_link"]
+    assert got["C2"]["nobg_goodput_drop"] == pytest.approx(want["C2"]["nobg_goodput_drop"], rel=0, abs=1e-9)
+    assert got["C2"]["nobg_abort_mean"] == pytest.approx(want["C2"]["nobg_abort_mean"])
     assert got["C2"]["rebalance_link_abort_mean"] == pytest.approx(want["C2"]["rebalance_link_abort_mean"])
+    assert got["ours_status"] == want["ours_status"]

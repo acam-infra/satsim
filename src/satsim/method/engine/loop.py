@@ -58,7 +58,7 @@ def run_one(cfg: dict, policy: dict, seed: int, trace: dict, t_swap_s: float, sl
     reqs, anchor, cluster_n = generate_arrivals(trace, float(cfg["workload"]["p_long"]), seed)
     env = simpy.Environment()
     bundle = bundle_from_policy(policy)
-    world = World(env, cfg, policy, t_swap_s, bundle=bundle)
+    world = World(env, cfg, policy, t_swap_s, bundle=bundle, seed=seed)
     env.process(net_proc(env, world.net))
     env.process(swap_proc(env, world))
     env.process(control_proc(env, world))
