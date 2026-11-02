@@ -2,12 +2,12 @@
 
 ## Layout
 
-`input/` is scenario data + offline generators. `src/satsim/method/` is engine + interfaces + policies. `src/satsim/output/` turns run rows into the two claims. Paper tiers: place_once | rebalance_free (no-cost) | rebalance_random / rebalance_ours (costly; ours=TODO). See `docs/SPEC_PLUGIN_FRAMEWORK.md`.
+`input/` scenarios + offline generate. `src/satsim/method/` engine + Scheduler + link_cost. `src/satsim/output/` C1/C2. Paper tiers: place_once | rebalance_free | rebalance_random / rebalance_ours(TODO). Spec: `docs/SPEC_PLUGIN_FRAMEWORK.md`. Results table: `README.md`.
 
 ## Language
 
-Before naming a claim, a knob, or a migration, read `GLOSSARY.md`. Before changing the scenario surface, the event loop, or how a claim is scored, read `docs/adr/`. How those files are consumed is in `docs/agents/domain.md`.
+Claims, knobs, migration: `GLOSSARY.md`. Scenario / loop / scoring changes: `docs/adr/`. How to consume them: `docs/agents/domain.md`.
 
 ## Lab
 
-A research result or a go / no-go goes to the self-hosted tracker at `api.gjam.tech`, workspace `ccds-lab`, entry `LAB-1466`.
+Research go / no-go → `api.gjam.tech`, workspace `ccds-lab`, entry `LAB-1466`.

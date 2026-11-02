@@ -1,24 +1,9 @@
 # configs
 
-论文三档 YAML 写法：
-
-```yaml
-policies:
-  place_once:
-    scheduler: place_once
-    link_cost: "off"
-  rebalance_free:
-    scheduler: rebalance_free
-    link_cost: "off"
-    hysteresis: 0.15
-  rebalance_random:
-    scheduler: rebalance_random
-    link_cost: "full"
-  rebalance_ours:
-    scheduler: rebalance_ours
-    link_cost: "full"  # TODO
-```
+可跑入口（symlink → `input/scenarios/`）。策略只写 `scheduler` + `link_cost`。
 
 ```bash
 .venv/bin/satsim configs/s1_cost_claims_v3.yaml
 ```
+
+三档 id：`place_once`｜`rebalance_free`｜`rebalance_random`｜`rebalance_ours`（TODO）。术语见根目录 `GLOSSARY.md`；主表见 `README.md`。

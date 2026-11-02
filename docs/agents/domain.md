@@ -4,14 +4,12 @@ How to read this repo's domain language.
 
 ## Before exploring, read these
 
-- `GLOSSARY.md` at the repo root.
-- `docs/adr/` for any decision that touches the area you are about to change.
+- `GLOSSARY.md` at the repo root（论文三档：首次分配 / 无消耗再分配 / 有消耗再分配）.
+- `docs/adr/` for any decision that touches the area you are about to change（含 `0002-three-tier-schedulers.md`）.
 
 If a file is missing, proceed. Create a glossary entry or an ADR only when a term or a decision is actually resolved.
 
 ## Layout
-
-Single context:
 
 ```
 /

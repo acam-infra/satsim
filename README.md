@@ -1,39 +1,41 @@
 # satsim
 
-四节点环上的迁移事件循环，用 SimPy 跑。依赖从清华镜像解析，见 `uv.toml`。
+四节点环上的轨面舱段迁移仿真（SimPy）。论文三档调度：**首次分配**｜**无消耗再分配**｜**有消耗再分配**（random 基线 + ours TODO）。
 
 ```bash
 uv sync
-# 主实验（显式 placement/rebalance/link_cost）
-.venv/bin/satsim input/scenarios/stac_s1_cost_claims_v3.yaml
-# 同入口：configs/
 .venv/bin/satsim configs/s1_cost_claims_v3.yaml
-# 泊松到达冒烟
-.venv/bin/satsim configs/poisson_smoke_v1.yaml
+.venv/bin/satsim configs/poisson_smoke_v1.yaml   # 泊松冒烟
 .venv/bin/pytest
 ```
 
-输入在 `input/`：`input/scenarios/stac_s1_cost_claims_v3.yaml` 指向底稿，用点路径覆盖已准入旋钮，再把六条已准入策略乘上种子。方法在 `src/satsim/method/`，换位锚在压缩过境的最密时隙之后。输出定义在 `src/satsim/output/`，汇总只算两句：
+## 主结果（`s1_cost_claims_v3`，多种子均值）
 
-- **C1**：首次分配解决不了换位。运行时重分配把请求再放到仍有功率的节点，换位后的 TPOT 才回来。
-- **C2**：每条链路有带宽上限。背景流和重分配流抢同一条上限时，上链路的重分配搬不完，收益掉回去。背景关掉后上限够用，两边重新重合。
+相对无消耗再分配（**粗体**为该列最优；箭头表示期望方向）。
 
-事件进程是到达后的解码、功率帽换位、周期控制器、背景流、KV 搬移。链路速率在流开始和结束时重算。换位后的 TPOT 才进达标判断，换位前节点仍是满功率。
+| 臂 | 档 | good_long ↑ | goodput ↑ | vs free | link_traffic_GB ↓ | abort ↓ |
+|---|---|---:|---:|---:|---:|---:|
+| place_once | 1 首次 | 12.8 | 242.8 | −31.9% | 0 | 0 |
+| **rebalance_free** | 2 无消耗 | **19.2** | **356.6** | — | **0** | **0** |
+| rebalance_random | 3 有消耗·随机 | 14.4 | 271.3 | −23.9% | 37.8 | 9.2 |
+| rebalance_ours | 3 有消耗·TODO | 12.8 | 242.8 | −31.9% | 0 | 0 |
 
-`input/scenes/inferred_orbit_pod_v3.yaml` 把已经生效的旋钮说成紧凑轨面舱段。它镜像 spec，不提供第二套物理。拿它当入口会直接拒绝。
+- **C1**：首次 → 无消耗：good_long 12.8→19.2；goodput **+46.9%**。
+- **C2**：无消耗 → 有消耗随机：goodput **−23.9%**；abort≈9.2（关背景后 abort→0，仍慢于 free）。
+- **ours**：占位，`mig=0`，表现同首次分配；待实现。
 
-新覆盖路径、`grid`、非 `ring`、非严格优先级，加载时拒绝。论文三档调度：`place_once`｜`rebalance_free`（无消耗）｜`rebalance_random`/`rebalance_ours`（有消耗；ours=TODO）。YAML 写 `scheduler` + `link_cost`。C1/C2 按档位选臂。`trace.kind`：`synthetic_pass` / `poisson`。
+## Claims（口径）
 
-## 插件框架（进行中）
+- **C1**：首次分配解决不了功率帽换位；无消耗再分配才把请求放到仍有功率的节点。
+- **C2**：有消耗再分配走链路，与背景流争带宽时随机基线收益掉回去。
 
-顶层仍是 **input / method / output**。方法内再拆 `engine` + `interfaces` + `policies`；请求生成在 `input/generate`（默认线下）。规格见 [`docs/SPEC_PLUGIN_FRAMEWORK.md`](docs/SPEC_PLUGIN_FRAMEWORK.md)。可跑入口：`input/scenarios/` 与 `configs/`。
+达标只看换位后的 TPOT。场景镜像见 `input/scenes/`（不能当入口跑）。
 
-## 阅读路径（方法）
+## 阅读路径
 
-1. YAML：`scheduler`（`place_once` | `rebalance_free` | `rebalance_random` | `rebalance_ours`）+ `link_cost`
-2. `method/registry.py` → 一个 `Scheduler` + `LinkCostModel`
-3. `method/engine`：到达回放时 `place`；控制周期 `maybe_rebalance`
-4. `output/claims.py`：按 scheduler/link_cost 出 C1/C2
+1. 术语：`GLOSSARY.md`
+2. 三档决策：`docs/adr/0002-three-tier-schedulers.md`
+3. 插件规格：`docs/SPEC_PLUGIN_FRAMEWORK.md`
+4. YAML：`scheduler` + `link_cost`（见 `configs/`）
 
-详见 [`docs/SPEC_PLUGIN_FRAMEWORK.md`](docs/SPEC_PLUGIN_FRAMEWORK.md)。
-
+输入在 `input/`（或 `configs/` symlink）；方法在 `src/satsim/method/`（全局 Scheduler）；输出在 `src/satsim/output/`。
