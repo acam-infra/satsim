@@ -1,0 +1,27 @@
+schema: satsim.scene/v1
+name: poisson_smoke_v1
+story: |
+  与主实验同构的四节点环，到达改为齐次泊松（线下生成）。
+  换位时刻用 absolute，避免多种子锚点漂移。
+  本文件只做冒烟，不支撑 C1/C2 主表。
+not_modeled:
+  - 真实星历
+  - 主实验 claim 数字
+mirrors:
+  cfg:
+    nodes: 4
+    topology: ring
+    arrival_window_s: 120.0
+    net.link_gbps: 10.0
+    background.gbps_per_node: 0
+    background.strict_priority: true
+    gpu.kv_gib: 24.0
+    workload.p_long: 0.2
+    cost.timeout_s: 120.0
+  spec:
+    t_swap.anchor: absolute
+    t_swap.t_s: 40
+    t_swap.P_cap: 80
+    trace.kind: poisson
+    trace.window_s: 60
+    trace.rate_per_s: 0.5

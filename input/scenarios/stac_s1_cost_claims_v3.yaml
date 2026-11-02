@@ -1,6 +1,6 @@
-# 首次分配解决不了换位。运行时重分配才行。
-# 上链路的重分配和背景流抢同一条带宽上限。
-# 不读 STAC jsonl。synthetic_pass 是压缩过境的替身，见 input/scenes/。
+# C1: place_once vs rebalance_local
+# C2: rebalance_local vs rebalance_over_link（背景争用）；*_nobg / *_net 为对照
+# 只写 placement / rebalance / link_cost + knobs。link_cost 的 off/full/net 请加引号。
 name: stac_s1_cost_claims_v3
 base: construct_s1.yaml
 trace:
@@ -26,39 +26,38 @@ overrides:
   net.link_gbps: 10.0
   gpu.kv_gib: 24.0
 policies:
-  first:
-    route: late
-  rebalance:
-    route: late
-    migrate: full
+  place_once:
+    placement: first
+    rebalance: "none"
+    link_cost: "off"
+  rebalance_local:
+    placement: first
+    rebalance: "local"
+    link_cost: "off"
     hysteresis: 0.15
-    cfg:
-      cost.mode: free
-  rebalance_link:
-    route: late
-    migrate: full
+  rebalance_over_link:
+    placement: first
+    rebalance: "with_link"
+    link_cost: "full"
     hysteresis: 0.15
-    cfg:
-      cost.mode: full
-  rebalance_link_net:
-    route: late
-    migrate: full
+  rebalance_over_link_net:
+    placement: first
+    rebalance: "with_link"
+    link_cost: "net"
     hysteresis: 0.15
-    cfg:
-      cost.mode: net
-  rebalance_nobg:
-    route: late
-    migrate: full
+  rebalance_local_nobg:
+    placement: first
+    rebalance: "local"
+    link_cost: "off"
     hysteresis: 0.15
-    cfg:
-      cost.mode: free
+    knobs:
       background.gbps_per_node: 0
-  rebalance_link_nobg:
-    route: late
-    migrate: full
+  rebalance_over_link_nobg:
+    placement: first
+    rebalance: "with_link"
+    link_cost: "full"
     hysteresis: 0.15
-    cfg:
-      cost.mode: full
+    knobs:
       background.gbps_per_node: 0
 seeds: [1, 2, 3, 4, 5]
 slo:

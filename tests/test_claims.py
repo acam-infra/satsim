@@ -3,7 +3,8 @@ from pathlib import Path
 import pytest
 
 from satsim.__main__ import run_spec
-from satsim.input.spec import SpecError, resolve_spec
+from satsim.input.load import resolve_spec
+from satsim.input.schema import SpecError
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = ROOT / "input" / "scenarios" / "stac_s1_cost_claims_v3.yaml"
@@ -16,7 +17,10 @@ def test_scene_is_not_a_run():
 
 
 def _detached(text: str, dest: Path) -> Path:
-    text = text.replace("base: construct_s1.yaml", f"base: {ROOT / 'input' / 'scenarios' / 'construct_s1.yaml'}")
+    text = text.replace(
+        "base: construct_s1.yaml",
+        f"base: {ROOT / 'input' / 'scenarios' / 'construct_s1.yaml'}",
+    )
     text = text.replace(
         "scene: ../scenes/inferred_orbit_pod_v3.yaml",
         f"scene: {SCENE}",
@@ -25,13 +29,13 @@ def _detached(text: str, dest: Path) -> Path:
     return dest
 
 
-def test_unknown_policy_is_refused(tmp_path: Path):
+def test_policy_missing_explicit_fields_refused(tmp_path: Path):
     text = SPEC.read_text().replace(
-        "  first:\n",
-        "  invented:\n    route: late\n  first:\n",
+        "  place_once:\n",
+        "  invented:\n    hysteresis: 0.15\n  place_once:\n",
         1,
     )
-    with pytest.raises(SpecError, match="未准入的策略"):
+    with pytest.raises(SpecError, match="显式字段|未准入字段"):
         resolve_spec(_detached(text, tmp_path / "bad.yaml"))
 
 

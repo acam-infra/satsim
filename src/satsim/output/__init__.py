@@ -1,1 +1,1 @@
-"""Output definition: first placement versus runtime rebalance, plus link cost."""
+"""输出层：单次指标与 C1/C2 汇总；只读 run rows。"""

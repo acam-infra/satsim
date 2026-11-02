@@ -1,1 +1,1 @@
-"""Event-loop method: arrivals, power-cap swap, decode, background, and migration."""
+"""方法层：engine（内核）+ interfaces（契约）+ policies（算法实现）。"""

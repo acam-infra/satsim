@@ -1,0 +1,16 @@
+{
+  "name": "stac_s1_cost_claims_v3",
+  "T_SWAP": 100.0,
+  "C1": {
+    "first_good_long": 12.8,
+    "rebalance_good_long": 19.2,
+    "goodput_gain": 0.4685212299
+  },
+  "C2": {
+    "link_cap_gbps": 10.0,
+    "goodput_drop": 0.2991026919,
+    "nobg_goodput_drop": 0.0,
+    "net_tracks_link": true,
+    "rebalance_link_abort_mean": 9.2
+  }
+}

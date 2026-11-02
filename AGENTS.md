@@ -2,7 +2,7 @@
 
 ## Layout
 
-`input/` is the scenario data. `src/satsim/method/` is the event loop that runs it. `src/satsim/output/` is how a run becomes the two claims.
+`input/` is scenario data + offline generators. `src/satsim/method/` is engine + interfaces + policies. `src/satsim/output/` turns run rows into the two claims. Policies are explicit placement/rebalance/link_cost only. See `docs/SPEC_PLUGIN_FRAMEWORK.md`.
 
 ## Language
 
