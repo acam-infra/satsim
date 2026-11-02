@@ -49,8 +49,7 @@ def run_spec(spec_path: Path, outdir: Path | None = None) -> dict:
             {
                 "policy": name,
                 "seed": seed,
-                "placement": pol["placement"],
-                "rebalance": pol["rebalance"],
+                "scheduler": pol["scheduler"],
                 "link_cost": pol["link_cost"],
                 "background_gbps_per_node": float(c2["background"]["gbps_per_node"]),
                 **out,
@@ -97,7 +96,7 @@ def main(argv: list[str] | None = None) -> None:
     print(f"{payload['name']}  T_SWAP={payload['T_SWAP']:.4g}  evidence={payload['evidence']}")
     for pol, row in claims["policies"].items():
         print(
-            f"  {pol:28} {row.get('placement')}/{row.get('rebalance')}/{row.get('link_cost')}"
+            f"  {pol:28} {row.get('scheduler')}/{row.get('link_cost')}"
             f"  good_long={_fmt(row['good_long_mean'])}"
             f"  goodput={_fmt(row['goodput_tok_s_mean'])}"
             f"  link_traffic_GB={_fmt(row['link_traffic_GB_mean'])}"

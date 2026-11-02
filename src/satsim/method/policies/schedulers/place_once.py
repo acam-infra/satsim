@@ -1,0 +1,14 @@
+"""只做初次分配，换位后不再分配。"""
+from __future__ import annotations
+
+from satsim.method.policies.schedulers._placement import place_by_iter_time
+
+
+class PlaceOnceScheduler:
+    id = "place_once"
+
+    def place(self, world, req) -> int:
+        return place_by_iter_time(world, req)
+
+    def maybe_rebalance(self, world) -> None:
+        return

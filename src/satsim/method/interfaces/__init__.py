@@ -1,7 +1,6 @@
-"""Narrow method interfaces: placement, rebalance, link cost."""
+"""窄接口：全局 Scheduler + 链路代价。"""
 
 from satsim.method.interfaces.link_cost import LinkCostModel
-from satsim.method.interfaces.placement import PlacementPolicy
-from satsim.method.interfaces.rebalance import RebalancePolicy
+from satsim.method.interfaces.scheduler import Scheduler
 
-__all__ = ["PlacementPolicy", "RebalancePolicy", "LinkCostModel"]
+__all__ = ["Scheduler", "LinkCostModel"]

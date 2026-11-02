@@ -17,10 +17,16 @@ OVERRIDE_REASONS = {
 
 LINK_COST_TO_MODE = {"off": "free", "full": "full", "net": "net"}
 
-PLACEMENT_IDS = {"first"}
-REBALANCE_IDS = {"none", "local", "with_link"}
+SCHEDULER_IDS = {"place_once", "rebalance_local", "rebalance_over_link"}
 LINK_COST_IDS = {"off", "full", "net"}
 KNOB_KEYS = {"background.gbps_per_node"}
+
+# scheduler 与 link_cost 的默认搭配（准入时校验）
+SCHEDULER_LINK_COST = {
+    "place_once": {"off"},
+    "rebalance_local": {"off"},
+    "rebalance_over_link": {"full", "net"},
+}
 
 MAX_SEEDS = 8
 
@@ -189,31 +195,30 @@ def _coerce_id(value: Any) -> str:
 
 
 def validate_policy(name: str, pol: dict) -> None:
-    """只认显式 placement / rebalance / link_cost + knobs；就地规范化。"""
+    """只认 scheduler + link_cost + knobs；就地规范化。"""
     _expect_keys(
         pol,
-        {"placement", "rebalance", "link_cost", "hysteresis", "knobs"},
+        {"scheduler", "link_cost", "hysteresis", "knobs"},
         f"policy {name}",
     )
-    for key in ("placement", "rebalance", "link_cost"):
-        if key not in pol:
-            raise SpecError(
-                f"{name}: 需要显式字段 placement / rebalance / link_cost（不要用旧拼盘写法）"
-            )
-        pol[key] = _coerce_id(pol[key])
+    if "scheduler" not in pol or "link_cost" not in pol:
+        raise SpecError(f"{name}: 需要 scheduler 与 link_cost")
+    pol["scheduler"] = _coerce_id(pol["scheduler"])
+    pol["link_cost"] = _coerce_id(pol["link_cost"])
 
-    if pol["placement"] not in PLACEMENT_IDS:
-        raise SpecError(f"{name}: placement 只准入 {sorted(PLACEMENT_IDS)}")
-    if pol["rebalance"] not in REBALANCE_IDS:
-        raise SpecError(f"{name}: rebalance 只准入 {sorted(REBALANCE_IDS)}")
+    if pol["scheduler"] not in SCHEDULER_IDS:
+        raise SpecError(f"{name}: scheduler 只准入 {sorted(SCHEDULER_IDS)}")
     if pol["link_cost"] not in LINK_COST_IDS:
         raise SpecError(f"{name}: link_cost 只准入 {sorted(LINK_COST_IDS)}")
+    allowed_lc = SCHEDULER_LINK_COST[pol["scheduler"]]
+    if pol["link_cost"] not in allowed_lc:
+        raise SpecError(
+            f"{name}: scheduler={pol['scheduler']} 时 link_cost 只准入 {sorted(allowed_lc)}"
+        )
 
-    if pol["rebalance"] == "none":
-        if pol["link_cost"] != "off":
-            raise SpecError(f"{name}: rebalance=none 时 link_cost 应为 off")
+    if pol["scheduler"] == "place_once":
         if "hysteresis" in pol:
-            raise SpecError(f"{name}: rebalance=none 不需要 hysteresis")
+            raise SpecError(f"{name}: place_once 不需要 hysteresis")
     else:
         h = pol.get("hysteresis")
         if not isinstance(h, (int, float)) or not 0 < float(h) <= 1:
@@ -226,9 +231,8 @@ def validate_policy(name: str, pol: dict) -> None:
     if extra:
         raise SpecError(f"{name}: knobs 只准入 {sorted(KNOB_KEYS)}，多了 {sorted(extra)}")
 
-    # 由 link_cost 推导 cost.mode，写入 knobs 供 load 打进 cfg
     applied = dict(knobs)
-    if pol["rebalance"] != "none":
+    if pol["scheduler"] != "place_once":
         applied["cost.mode"] = LINK_COST_TO_MODE[pol["link_cost"]]
     else:
         applied.pop("cost.mode", None)

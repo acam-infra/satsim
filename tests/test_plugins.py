@@ -1,4 +1,4 @@
-"""显式策略、泊松生成、configs 入口。"""
+"""全局 scheduler、泊松生成、configs 入口。"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -41,14 +41,13 @@ def test_configs_symlink_runs():
     assert payload["claims"]["C1"]["goodput_gain"] > 0
 
 
-def test_bundle_from_explicit_policy():
+def test_bundle_from_scheduler_policy():
     _, _, jobs = resolve_spec(MAIN)
     name, pol, c2, seed = next(j for j in jobs if j[0] == "rebalance_over_link")
     bundle = bundle_from_policy(pol)
-    assert pol["placement"] == "first"
-    assert pol["rebalance"] == "with_link"
+    assert pol["scheduler"] == "rebalance_over_link"
     assert pol["link_cost"] == "full"
-    assert bundle.rebalance.__class__.__name__ == "WithLinkRebalance"
+    assert bundle.scheduler.id == "rebalance_over_link"
     assert bundle.link_cost.mode == "full"
 
 
@@ -64,21 +63,21 @@ def test_poisson_generate_and_run():
     assert "rebalance_local" in payload["claims"]["policies"]
 
 
-def test_legacy_policy_body_refused(tmp_path: Path):
+def test_placement_rebalance_fields_refused(tmp_path: Path):
     text = MAIN.read_text().replace(
-        '  place_once:\n    placement: first\n    rebalance: "none"\n    link_cost: "off"\n',
-        "  place_once:\n    route: late\n",
+        "  place_once:\n    scheduler: place_once\n    link_cost: \"off\"\n",
+        "  place_once:\n    placement: first\n    rebalance: none\n    link_cost: \"off\"\n",
         1,
     )
-    with pytest.raises(SpecError, match="未准入字段|显式字段"):
+    with pytest.raises(SpecError, match="未准入字段|需要 scheduler"):
         resolve_spec(_detached(text, tmp_path / "legacy.yaml"))
 
 
-def test_cost_mode_in_knobs_refused(tmp_path: Path):
+def test_scheduler_link_cost_mismatch_refused(tmp_path: Path):
     text = MAIN.read_text().replace(
-        '  rebalance_local:\n    placement: first\n    rebalance: "local"\n    link_cost: "off"\n    hysteresis: 0.15\n',
-        '  rebalance_local:\n    placement: first\n    rebalance: "local"\n    link_cost: "off"\n    hysteresis: 0.15\n    knobs:\n      cost.mode: free\n',
+        "  place_once:\n    scheduler: place_once\n    link_cost: \"off\"\n",
+        "  place_once:\n    scheduler: place_once\n    link_cost: \"full\"\n",
         1,
     )
-    with pytest.raises(SpecError, match="knobs 只准入"):
-        resolve_spec(_detached(text, tmp_path / "bad_knob.yaml"))
+    with pytest.raises(SpecError, match="link_cost 只准入"):
+        resolve_spec(_detached(text, tmp_path / "bad_lc.yaml"))

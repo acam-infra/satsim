@@ -1,6 +1,6 @@
 # C1: place_once vs rebalance_local
-# C2: rebalance_local vs rebalance_over_link（背景争用）；*_nobg / *_net 为对照
-# 只写 placement / rebalance / link_cost + knobs。link_cost 的 off/full/net 请加引号。
+# C2: rebalance_local vs rebalance_over_link；*_nobg / net 为对照
+# 全局调度器：scheduler + link_cost（+ hysteresis / knobs）。off/full/net 请加引号。
 name: stac_s1_cost_claims_v3
 base: construct_s1.yaml
 trace:
@@ -27,34 +27,28 @@ overrides:
   gpu.kv_gib: 24.0
 policies:
   place_once:
-    placement: first
-    rebalance: "none"
+    scheduler: place_once
     link_cost: "off"
   rebalance_local:
-    placement: first
-    rebalance: "local"
+    scheduler: rebalance_local
     link_cost: "off"
     hysteresis: 0.15
   rebalance_over_link:
-    placement: first
-    rebalance: "with_link"
+    scheduler: rebalance_over_link
     link_cost: "full"
     hysteresis: 0.15
   rebalance_over_link_net:
-    placement: first
-    rebalance: "with_link"
+    scheduler: rebalance_over_link
     link_cost: "net"
     hysteresis: 0.15
   rebalance_local_nobg:
-    placement: first
-    rebalance: "local"
+    scheduler: rebalance_local
     link_cost: "off"
     hysteresis: 0.15
     knobs:
       background.gbps_per_node: 0
   rebalance_over_link_nobg:
-    placement: first
-    rebalance: "with_link"
+    scheduler: rebalance_over_link
     link_cost: "full"
     hysteresis: 0.15
     knobs:

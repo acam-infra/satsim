@@ -1,4 +1,4 @@
-"""显式 placement / rebalance / link_cost → 接口实现。"""
+"""scheduler id + link_cost → 实现。"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -6,33 +6,25 @@ from dataclasses import dataclass
 from satsim.method.policies.link_cost.full import FullLinkCost
 from satsim.method.policies.link_cost.net import NetLinkCost
 from satsim.method.policies.link_cost.off import OffLinkCost
-from satsim.method.policies.placement.first import FirstPlacement
-from satsim.method.policies.rebalance.local import LocalRebalance
-from satsim.method.policies.rebalance.none import NoRebalance
-from satsim.method.policies.rebalance.with_link import WithLinkRebalance
+from satsim.method.policies.schedulers.place_once import PlaceOnceScheduler
+from satsim.method.policies.schedulers.rebalance_local import RebalanceLocalScheduler
+from satsim.method.policies.schedulers.rebalance_over_link import RebalanceOverLinkScheduler
 
 
 @dataclass
 class PolicyBundle:
-    placement: object
-    rebalance: object
+    scheduler: object
     link_cost: object
 
 
-def _placement(kind: str):
-    if kind == "first":
-        return FirstPlacement()
-    raise ValueError(f"未知 placement: {kind}")
-
-
-def _rebalance(kind: str):
-    if kind == "none":
-        return NoRebalance()
-    if kind == "local":
-        return LocalRebalance()
-    if kind == "with_link":
-        return WithLinkRebalance()
-    raise ValueError(f"未知 rebalance: {kind}")
+def _scheduler(kind: str, *, hysteresis: float | None):
+    if kind == "place_once":
+        return PlaceOnceScheduler()
+    if kind == "rebalance_local":
+        return RebalanceLocalScheduler(hysteresis=float(hysteresis if hysteresis is not None else 0.15))
+    if kind == "rebalance_over_link":
+        return RebalanceOverLinkScheduler(hysteresis=float(hysteresis if hysteresis is not None else 0.15))
+    raise ValueError(f"未知 scheduler: {kind}")
 
 
 def _link_cost(kind: str):
@@ -45,13 +37,8 @@ def _link_cost(kind: str):
     raise ValueError(f"未知 link_cost: {kind}")
 
 
-def bundle_from_ids(placement: str, rebalance: str, link_cost: str) -> PolicyBundle:
-    return PolicyBundle(
-        placement=_placement(placement),
-        rebalance=_rebalance(rebalance),
-        link_cost=_link_cost(link_cost),
-    )
-
-
 def bundle_from_policy(pol: dict, cfg: dict | None = None) -> PolicyBundle:
-    return bundle_from_ids(pol["placement"], pol["rebalance"], pol["link_cost"])
+    return PolicyBundle(
+        scheduler=_scheduler(pol["scheduler"], hysteresis=pol.get("hysteresis")),
+        link_cost=_link_cost(pol["link_cost"]),
+    )

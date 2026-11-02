@@ -1,4 +1,4 @@
-"""C1/C2：按 placement/rebalance/link_cost + 是否 nobg 选臂，不依赖旧拼盘策略名。"""
+"""C1/C2：按 scheduler + link_cost + 是否 nobg 选臂。"""
 from __future__ import annotations
 
 import collections
@@ -19,8 +19,7 @@ def _is_nobg(row: dict) -> bool:
 def _select(
     rows: list[dict],
     *,
-    placement: str,
-    rebalance: str,
+    scheduler: str,
     link_cost: str,
     nobg: bool,
 ) -> list[dict]:
@@ -28,9 +27,7 @@ def _select(
     for r in rows:
         if r.get("status") != "ok":
             continue
-        if r.get("placement") != placement:
-            continue
-        if r.get("rebalance") != rebalance:
+        if r.get("scheduler") != scheduler:
             continue
         if r.get("link_cost") != link_cost:
             continue
@@ -44,8 +41,7 @@ def _policy_block(rs: list[dict]) -> dict:
     traffic = _mean(rs, "link_traffic_GB")
     return dict(
         n=len(rs),
-        placement=rs[0]["placement"] if rs else None,
-        rebalance=rs[0]["rebalance"] if rs else None,
+        scheduler=rs[0]["scheduler"] if rs else None,
         link_cost=rs[0]["link_cost"] if rs else None,
         background_gbps_per_node=_mean(rs, "background_gbps_per_node"),
         good_long_mean=_mean(rs, "good_long"),
@@ -74,12 +70,12 @@ def claim_summary(rows: list[dict], evidence: str) -> dict:
     for pol, rs in sorted(by_pol.items()):
         summary["policies"][pol] = _policy_block(rs)
 
-    place = _select(ok_rows, placement="first", rebalance="none", link_cost="off", nobg=False)
-    local = _select(ok_rows, placement="first", rebalance="local", link_cost="off", nobg=False)
-    over_link = _select(ok_rows, placement="first", rebalance="with_link", link_cost="full", nobg=False)
-    over_net = _select(ok_rows, placement="first", rebalance="with_link", link_cost="net", nobg=False)
-    local0 = _select(ok_rows, placement="first", rebalance="local", link_cost="off", nobg=True)
-    link0 = _select(ok_rows, placement="first", rebalance="with_link", link_cost="full", nobg=True)
+    place = _select(ok_rows, scheduler="place_once", link_cost="off", nobg=False)
+    local = _select(ok_rows, scheduler="rebalance_local", link_cost="off", nobg=False)
+    over_link = _select(ok_rows, scheduler="rebalance_over_link", link_cost="full", nobg=False)
+    over_net = _select(ok_rows, scheduler="rebalance_over_link", link_cost="net", nobg=False)
+    local0 = _select(ok_rows, scheduler="rebalance_local", link_cost="off", nobg=True)
+    link0 = _select(ok_rows, scheduler="rebalance_over_link", link_cost="full", nobg=True)
 
     def by_seed(rs: list[dict]) -> dict[int, dict]:
         return {int(r["seed"]): r for r in rs}
@@ -102,7 +98,7 @@ def claim_summary(rows: list[dict], evidence: str) -> dict:
         summary["C1"] = dict(
             claim="runtime_rebalance_needed",
             narrative="首次分配解决不了换位。运行时重分配把请求再放到仍有功率的节点",
-            arms=dict(place_once="first/none/off", rebalance_local="first/local/off"),
+            arms=dict(place_once="place_once/off", rebalance_local="rebalance_local/off"),
             first_good_long=st["good_long_mean"],
             rebalance_good_long=fr["good_long_mean"],
             good_long_gain=fr["good_long_mean"] - st["good_long_mean"],
@@ -130,7 +126,10 @@ def claim_summary(rows: list[dict], evidence: str) -> dict:
         c2 = dict(
             claim="link_cap_contention",
             narrative="每条链路有带宽上限。多条流抢同一条上限时，上链路的重分配完不成，收益掉回去",
-            arms=dict(rebalance_local="first/local/off", rebalance_over_link="first/with_link/full"),
+            arms=dict(
+                rebalance_local="rebalance_local/off",
+                rebalance_over_link="rebalance_over_link/full",
+            ),
             link_cap_gbps=cm.get("link_cap_gbps_mean"),
             max_flows_on_link=cm.get("max_flows_on_link_mean"),
             rebalance_goodput_tok_s=g_fr,

@@ -36,13 +36,13 @@ _Avoid_: 第二套仿真
 压进一段墙钟的到达簇，用来代替真实观测轨迹。
 _Avoid_: STAC 复现, GPU 实测
 
-**显式策略字段**:
-YAML 里只用 `placement` / `rebalance` / `link_cost`（+ `hysteresis` / `knobs`）选择接口实现；实验臂名如 `place_once` 只是标签。C1/C2 按接口组合匹配，不认旧拼盘名。
-_Avoid_: route/migrate/cfg 旧写法, 把 nobg 写成独立算法
+**全局调度器 (scheduler)**:
+一个策略同时覆盖初次分配 `place` 与再分配 `maybe_rebalance`。YAML 写 `scheduler` + `link_cost`（+ `hysteresis` / `knobs`）。
+_Avoid_: 并列 placement/rebalance 两套钩子, route/migrate/cfg
 
 **link_cost: off|full|net**:
-迁移是否上链路及如何计代价。`off` 对应瞬时搬走（历史 `cost.mode: free`）。YAML 须写成字符串（`off` 不加引号会被读成布尔）。
-_Avoid_: free 当作策略名
+迁移是否上链路及如何计代价。与 scheduler 有准入搭配（如 place_once 只配 off）。
+_Avoid_: 把 off 写成布尔（YAML 须加引号）
 
 **线下到达生成**:
 `trace.kind: synthetic_pass` 或 `poisson`；仿真开始前生成完整请求序列再回放。

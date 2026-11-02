@@ -29,13 +29,13 @@ def _detached(text: str, dest: Path) -> Path:
     return dest
 
 
-def test_policy_missing_explicit_fields_refused(tmp_path: Path):
+def test_policy_missing_scheduler_refused(tmp_path: Path):
     text = SPEC.read_text().replace(
         "  place_once:\n",
         "  invented:\n    hysteresis: 0.15\n  place_once:\n",
         1,
     )
-    with pytest.raises(SpecError, match="显式字段|未准入字段"):
+    with pytest.raises(SpecError, match="scheduler|未准入字段"):
         resolve_spec(_detached(text, tmp_path / "bad.yaml"))
 
 

@@ -190,7 +190,6 @@ class World:
         self.policy = policy
         self.t_swap = t_swap
         self.n = cfg["nodes"]
-        self.hyst = float(policy.get("hysteresis") or 0.15)
         self.net = Net(env, cfg)
         self.nodes: list[list[Req]] = [[] for _ in range(self.n)]
         self.acc = dict(mig=0, abort=0, mig_bytes=0.0, max_flows_on_link=0)
@@ -199,8 +198,7 @@ class World:
             from satsim.method.registry import bundle_from_policy
 
             bundle = bundle_from_policy(policy)
-        self.placement = bundle.placement
-        self.rebalance = bundle.rebalance
+        self.scheduler = bundle.scheduler
         self.link_cost = bundle.link_cost
         self._install_background()
 
@@ -246,7 +244,7 @@ class World:
             self._poke(r)
 
     def admit(self, req: Req) -> None:
-        j = self.placement.place(self, req)
+        j = self.scheduler.place(self, req)
         req.node = j
         self.nodes[j].append(req)
         self.poke_node(j)
@@ -260,7 +258,7 @@ class World:
         return _bfs_path(self.n, s, d)
 
     def try_move(self) -> None:
-        self.rebalance.maybe_migrate(self)
+        self.scheduler.maybe_rebalance(self)
 
     def migrate_proc(self, req: Req, src: int, dst: int):
         req.migrating = True

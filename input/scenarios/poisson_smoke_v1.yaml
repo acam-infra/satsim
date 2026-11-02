@@ -1,4 +1,4 @@
-# 泊松到达冒烟：线下 generate → engine 回放
+# 泊松到达冒烟
 # .venv/bin/satsim configs/poisson_smoke_v1.yaml
 name: poisson_smoke_v1
 base: construct_s1.yaml
@@ -25,12 +25,10 @@ overrides:
   gpu.kv_gib: 24.0
 policies:
   place_once:
-    placement: first
-    rebalance: "none"
+    scheduler: place_once
     link_cost: "off"
   rebalance_local:
-    placement: first
-    rebalance: "local"
+    scheduler: rebalance_local
     link_cost: "off"
     hysteresis: 0.15
 seeds: [1, 2]

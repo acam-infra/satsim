@@ -2,7 +2,7 @@
 
 ## Layout
 
-`input/` is scenario data + offline generators. `src/satsim/method/` is engine + interfaces + policies. `src/satsim/output/` turns run rows into the two claims. Policies are explicit placement/rebalance/link_cost only. See `docs/SPEC_PLUGIN_FRAMEWORK.md`.
+`input/` is scenario data + offline generators. `src/satsim/method/` is engine + interfaces + policies. `src/satsim/output/` turns run rows into the two claims. Method hooks are a single global Scheduler (place + maybe_rebalance) plus link_cost. See `docs/SPEC_PLUGIN_FRAMEWORK.md`.
 
 ## Language
 

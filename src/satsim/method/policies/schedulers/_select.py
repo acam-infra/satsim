@@ -1,11 +1,11 @@
-"""重分配候选选择（local / with_link 共用）。"""
+"""再分配候选选择。"""
 from __future__ import annotations
 
 from satsim.method.engine.timing import iter_time
 from satsim.method.engine.world import MAX_INFLIGHT, MAX_OUT
 
 
-def pick_migration(world):
+def pick_migration(world, hysteresis: float):
     """若应发起迁移，返回 (req, src, dst)，否则 None。"""
     nd, ctx = world._stats()
     f = [world.f_of(j, world.env.now) for j in range(world.n)]
@@ -13,7 +13,7 @@ def pick_migration(world):
     sc = [iter_time(nd[j], ctx[j], f[j], gpu) for j in range(world.n)]
     src = max(range(world.n), key=lambda j: sc[j])
     dst = min(range(world.n), key=lambda j: sc[j])
-    if src == dst or sc[src] <= sc[dst] * (1.0 + world.hyst):
+    if src == dst or sc[src] <= sc[dst] * (1.0 + hysteresis):
         return None
     inflight = [r for rs in world.nodes for r in rs if r.migrating]
     if len(inflight) >= MAX_INFLIGHT:
