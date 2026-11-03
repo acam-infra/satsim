@@ -3,3 +3,6 @@ runs/
 __pycache__/
 *.pyc
 .pytest_cache/
+input/datasets/*.json
+input/datasets/*.jsonl
+# keep sampled CSV; ignore raw dumps

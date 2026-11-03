@@ -1,0 +1,28 @@
+schema: satsim.scene/v1
+name: sharegpt_s1_smoke_v1
+story: |
+  四节点环；ShareGPT 长度 CSV + 定间隔到达（EcoServe 风格，无时间戳）。
+  CSV 默认 char/4 近似；冒烟用 len_scale=10 加压。long = 缩放后 pin+pout >= 1500。
+  本文件只做冒烟，不支撑论文主表。
+not_modeled:
+  - 真实 HF tokenizer / EcoServe TTFT-TPOT 客户端 SLO
+  - EcoServe 跨实例编排 / 不迁 KV
+mirrors:
+  cfg:
+    nodes: 4
+    topology: ring
+    arrival_window_s: 90.0
+    net.link_gbps: 10.0
+    background.gbps_per_node: 2.0
+    background.strict_priority: true
+    gpu.kv_gib: 24.0
+    workload.p_long: 0.2
+    cost.timeout_s: 120.0
+  spec:
+    t_swap.anchor: absolute
+    t_swap.t_s: 30
+    t_swap.P_cap: 80
+    trace.kind: sharegpt
+    trace.window_s: 40
+    trace.rate_per_s: 3.0
+    trace.num_prompts: 120

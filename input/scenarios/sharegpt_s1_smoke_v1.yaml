@@ -1,0 +1,45 @@
+# ShareGPT 长度分布 + 定间隔到达冒烟（EcoServe 风格：无时间戳）
+# 说明：
+#   - 长度 CSV 由 scripts/prep_sharegpt_lengths.py 导出（默认 char/4；无 HF tokenizer）
+#   - len_scale=10：把近似长度拉到更接近本仓 synthetic pad 的压力量级，否则 C1≈0
+#   - 到达压进 40s 窗 + tpot_slo=0.02，才能在换位功率帽下分出三臂
+name: sharegpt_s1_smoke_v1
+base: construct_s1.yaml
+trace:
+  kind: sharegpt
+  path: input/datasets/sharegpt_lengths_v1.csv
+  window_s: 40
+  rate_per_s: 3.0
+  arrival: deterministic
+  num_prompts: 120
+  long_threshold_tokens: 1500
+  max_seqlen: 4096
+  len_scale: 10.0
+  jitter_s: 0.0
+t_swap:
+  anchor: absolute
+  t_s: 30
+  P_cap: 80
+overrides:
+  arrival_window_s: 90.0
+  background.gbps_per_node: 2.0
+  background.strict_priority: true
+  net.link_gbps: 10.0
+  gpu.kv_gib: 24.0
+policies:
+  place_once:
+    scheduler: place_once
+    link_cost: "off"
+  rebalance_free:
+    scheduler: rebalance_free
+    link_cost: "off"
+    hysteresis: 0.15
+  rebalance_random:
+    scheduler: rebalance_random
+    link_cost: "full"
+seeds: [1, 2, 3]
+slo:
+  tpot_slo: 0.02
+evidence: sim_sharegpt_smoke
+metadata:
+  scene: ../scenes/sharegpt_s1_smoke_v1.yaml

@@ -45,6 +45,16 @@ GAMMA_DEFAULTS = {
     "jitter_s": 0.0,
 }
 
+SHAREGPT_DEFAULTS = {
+    "window_s": 180.0,
+    "rate_per_s": 0.5,
+    "arrival": "deterministic",
+    "cv": 1.0,
+    "jitter_s": 0.0,
+    "long_threshold_tokens": 761,
+    "max_seqlen": 4096,
+}
+
 
 class SpecError(ValueError):
     pass
@@ -311,7 +321,59 @@ def validate_trace(trace: dict) -> None:
         if "target_n" in trace and int(trace["target_n"]) < 1:
             raise SpecError("target_n 至少为 1")
         return
-    raise SpecError("trace.kind 只准入 synthetic_pass / poisson / gamma")
+    if kind == "sharegpt":
+        allowed = {
+            "kind",
+            "path",
+            "window_s",
+            "compress_horizon_s",
+            "rate_per_s",
+            "arrival",
+            "cv",
+            "jitter_s",
+            "num_prompts",
+            "n",
+            "target_n",
+            "long_threshold_tokens",
+            "max_seqlen",
+            "len_scale",
+            "pack_window_s",
+        }
+        _expect_keys(trace, allowed, "trace")
+        if "path" not in trace or not str(trace["path"]).strip():
+            raise SpecError("sharegpt 需要 path")
+        if "window_s" not in trace and "compress_horizon_s" not in trace:
+            trace["window_s"] = SHAREGPT_DEFAULTS["window_s"]
+        if "rate_per_s" not in trace:
+            trace["rate_per_s"] = SHAREGPT_DEFAULTS["rate_per_s"]
+        if "arrival" not in trace:
+            trace["arrival"] = SHAREGPT_DEFAULTS["arrival"]
+        if "cv" not in trace:
+            trace["cv"] = SHAREGPT_DEFAULTS["cv"]
+        if "jitter_s" not in trace:
+            trace["jitter_s"] = SHAREGPT_DEFAULTS["jitter_s"]
+        if "long_threshold_tokens" not in trace:
+            trace["long_threshold_tokens"] = SHAREGPT_DEFAULTS["long_threshold_tokens"]
+        if "max_seqlen" not in trace:
+            trace["max_seqlen"] = SHAREGPT_DEFAULTS["max_seqlen"]
+        window = float(trace.get("window_s") or trace.get("compress_horizon_s"))
+        rate = float(trace["rate_per_s"])
+        if window <= 0 or rate <= 0:
+            raise SpecError("sharegpt 需要 window_s > 0 且 rate_per_s > 0")
+        arrival = str(trace["arrival"])
+        if arrival not in {"deterministic", "poisson", "gamma"}:
+            raise SpecError("sharegpt.arrival 只准入 deterministic / poisson / gamma")
+        if arrival == "gamma" and float(trace["cv"]) <= 0:
+            raise SpecError("sharegpt gamma 需要 cv > 0")
+        for key in ("num_prompts", "n", "target_n"):
+            if key in trace and int(trace[key]) < 1:
+                raise SpecError(f"{key} 至少为 1")
+        if int(trace["long_threshold_tokens"]) < 1:
+            raise SpecError("long_threshold_tokens 至少为 1")
+        if int(trace["max_seqlen"]) < 8:
+            raise SpecError("max_seqlen 过小")
+        return
+    raise SpecError("trace.kind 只准入 synthetic_pass / poisson / gamma / sharegpt")
 
 
 def _coerce_id(value: Any) -> str:
