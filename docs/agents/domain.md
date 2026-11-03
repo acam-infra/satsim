@@ -25,3 +25,8 @@ Name a claim, a knob, or a migration with the term in `GLOSSARY.md`. When a term
 ## ADR conflicts
 
 If a change contradicts an ADR, say so in the write-up before overriding it.
+
+## 结果表口径
+
+与根目录 `AGENTS.md`「结果表」一节相同：基线 `place_once`，相对百分比写在数值旁，粗体标列最优。新实验表不得改用 free 当基线，也不得只给裸数字不写 %。
+

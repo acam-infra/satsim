@@ -15,6 +15,8 @@ uv sync
 
 ## 主结果（环 `s1_cost_claims_v3`，多种子均值）
 
+表格式约束见 `AGENTS.md`（基线 place_once，% 写在数值旁）。
+
 基线 **place_once**；括号内为相对基线；**粗体**为该列最优。
 
 | 臂 | good_long ↑ | goodput ↑ | link_GB ↓ | abort ↓ |
@@ -41,6 +43,20 @@ uv sync
 
 - 跨轨 grid 上 C1 与环同量级；random 只小幅好于首次，相对 free 约 **−25.9%**（nobg 仍约 **−20.9%**）——链路迁移本身在拖，abort 尚未逼出。
 - 跑：`.venv/bin/satsim configs/orbit_planes_s1_cost_claims_v1.yaml`；ADR：`docs/adr/0003-orbit-planes-topology-snapshot.md`。
+
+
+## 跨轨 E★ 加严争用（`orbit_planes_estar_contention_v1`）
+
+构造：换位后暗 0+1、亮 2+3；有代价臂 **sync_burst 迁向 node2**，路径共享 E★=`(0,2)`。主轴 `link_gbps=0.5`，辅 timeout=30 / control=0.25 / 高并发；bg=0。每请求只尝试一次（避免 abort 重试刷爆）。
+
+| 臂 | good_long ↑ | goodput ↑ | link_GB ↓ | abort ↓ | E★峰值流 |
+|---|---|---|---|---|---|
+| 首次分配 | 6.4 | 129.1 | 0.0 | 0.0 | 0.0 |
+| **无消耗再分配** | **19.2 (+200%)** | **356.6 (+176%)** | **0.0** | **0.0** | **0.0** |
+| 有消耗·E★汇聚 | 6.4 (+0%) | 129.1 (+0%) | 2.8 | 12.8 | 12.8 |
+
+- 无消耗仍大好；有代价在 E★ 上互抢后 **全部超时 abort（mig=0）**，成绩被压回与首次持平，相对 free 约 **−66.7%** good_long。
+- 跑：`.venv/bin/python scripts/exp_orbit_estar_contention.py`（配置 `configs/orbit_planes_estar_contention_v1.yaml`）。
 
 ## 吞吐定义
 

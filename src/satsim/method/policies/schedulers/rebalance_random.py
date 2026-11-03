@@ -1,4 +1,4 @@
-"""有消耗再分配 · random 基线：随机选请求与目标节点，迁移走链路。"""
+"""有消耗再分配 · random 基线：随机选请求；目标只在比源更亮的节点中随机。"""
 from __future__ import annotations
 
 from satsim.method.engine.world import MAX_INFLIGHT, MAX_OUT
@@ -6,7 +6,7 @@ from satsim.method.policies.schedulers._placement import place_by_iter_time
 
 
 class RebalanceRandomScheduler:
-    """有链路代价下的随机再分配基线。"""
+    """有链路代价下的随机再分配基线（目标须比源更亮）。"""
 
     id = "rebalance_random"
 
@@ -30,12 +30,17 @@ class RebalanceRandomScheduler:
         if sum(1 for r in world.nodes[src] if r.migrating) >= MAX_OUT:
             return
         cap = float(world.cfg["gpu"]["kv_gib"]) * (2**30)
+        now = world.env.now
+        src_f = world.f_of(src, now)
+        # 只迁向当前 clock factor f_of 严格更高（更亮）的节点；无更亮目标则跳过，禁止迁去更暗星。
         dests = []
         for dst in range(world.n):
             if dst == src:
                 continue
             used = sum(r.kv for r in world.nodes[dst]) * world.bpt
-            if used + req.kv * world.bpt <= cap:
+            if used + req.kv * world.bpt > cap:
+                continue
+            if world.f_of(dst, now) > src_f:
                 dests.append(dst)
         if not dests:
             return
