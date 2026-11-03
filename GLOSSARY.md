@@ -60,3 +60,11 @@ _Avoid_: Walker, 全星座引擎, 逐 tick 重连
 对比臂时以首次分配（place_once）为 100% 参照；其它臂写成「数值 (+相对%)」。
 _Avoid_: 以 free 为表内基线却不标明, 只报裸均值
 
+**动态热节流**:
+按 `thermal.mode: dynamic` 启用的每节点一阶 RC：忙时升温，越过阈值后把时钟倍率压到地板（默认叙事约 84°C → 0.71×，来自 LAB-1178/1214，可改 YAML）。缺省仍是显式功率帽换位。
+_Avoid_: 完整轨道热平衡, 食季 ODE, 已标定 A100 真值
+
+**显式功率帽**:
+`thermal.mode: explicit`（缺省）：用 `explicit_events` 写死的 (node,t0,t1,P_cap) 时间线，再经 DVFS 得时钟倍率。
+_Avoid_: 自动温控
+

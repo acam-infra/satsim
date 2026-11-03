@@ -11,7 +11,7 @@ not_modeled:
   - 真实星历和六根数
   - 时变 ISL
   - 全星座规模
-  - 热容/食季 ODE
+  - 完整轨道热平衡/食季（本 claim 场景仍用显式功率帽；可选 dynamic 仅为一阶 RC 示意）
   - STAC L1 的真实到达时刻（这里是均匀压进 horizon 的合成簇）
   - 上游全引擎跑出的 goodput 数字（本文件不引用、不复写那些数）
 mirrors:

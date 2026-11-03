@@ -53,3 +53,29 @@ policies:
 - `total_token_throughput_tok_s` = Σ(prompt+output of completed) / 同上 horizon
 - `goodput_tok_s` 仍为 SLO 过滤的输出 token / `arrival_window_s`（claim 对照）
 
+## 热模型（ThermalModel）
+
+`World.f_of` → `thermal.clock_factor`；控制周期 `world.thermal_tick()` → `advance`。
+
+| mode | 行为 |
+|---|---|
+| `explicit`（缺省） | `explicit_events` + DVFS，与旧 golden 同路径 |
+| `dynamic` | 每节点一阶 RC + 滞回两档节流；**忽略** explicit_events |
+
+```yaml
+thermal:
+  mode: dynamic
+  P_idle: 60
+  P_max: 300
+  gamma: 2.4
+  f_min: 0.35
+  tau_s: 30.0
+  R_th: 0.4          # °C/W，示意
+  T_amb_C: 20.0
+  T0_C: 40.0
+  T_throttle_C: 84.0 # LAB-1178/1214 叙事，非本仓标定
+  T_release_C: 78.0
+  f_throttle: 0.71
+  P_busy: 300
+```
+

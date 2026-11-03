@@ -10,7 +10,7 @@ not_modeled:
   - 逐 tick 可见性重连
   - Walker / 全星座规模
   - 传感任务链与仅算力驻留约束（角色仅为元数据）
-  - 热容/食季 ODE
+  - 完整轨道热平衡/食季（本 claim 场景仍用显式功率帽；可选 dynamic 仅为一阶 RC 示意）
 mirrors:
   cfg:
     nodes: 4

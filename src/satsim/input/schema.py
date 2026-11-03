@@ -19,6 +19,7 @@ LINK_COST_TO_MODE = {"off": "free", "full": "full", "net": "net"}
 
 SCHEDULER_IDS = {"place_once", "rebalance_free", "rebalance_random", "rebalance_ours"}
 LINK_COST_IDS = {"off", "full", "net"}
+THERMAL_MODES = {"explicit", "dynamic"}
 KNOB_KEYS = {"background.gbps_per_node"}
 
 # 论文三档：初次 / 无消耗再分配 / 有消耗再分配（random|ours）
@@ -162,6 +163,61 @@ def _validate_orbit_block(orbit: dict, n: int) -> None:
         raise SpecError("orbit 生成的邻接图不连通；加大 distance_threshold_km 或打开 same_plane_neighbors")
 
 
+
+def _validate_thermal(th: dict) -> None:
+    """DVFS 公共参数必填；mode 缺省为 explicit。dynamic 另要 RC / 节流参数。"""
+    if not isinstance(th, dict):
+        raise SpecError("thermal 必须是映射")
+    mode = th.get("mode", "explicit")
+    if mode not in THERMAL_MODES:
+        raise SpecError(f"thermal.mode 只准入 {' | '.join(sorted(THERMAL_MODES))}，收到 {mode!r}")
+    common = {"P_idle", "P_max", "gamma", "f_min", "mode", "explicit_events"}
+    if mode == "explicit":
+        _expect_keys(th, common, "thermal")
+        for k in ("P_idle", "P_max", "gamma", "f_min"):
+            if k not in th:
+                raise SpecError(f"thermal 缺少 {k}")
+        return
+    dynamic_keys = common | {
+        "tau_s",
+        "R_th",
+        "T_amb_C",
+        "T0_C",
+        "T_throttle_C",
+        "T_release_C",
+        "f_throttle",
+        "P_busy",
+    }
+    _expect_keys(th, dynamic_keys, "thermal")
+    required = {
+        "P_idle",
+        "P_max",
+        "gamma",
+        "f_min",
+        "tau_s",
+        "R_th",
+        "T_amb_C",
+        "T0_C",
+        "T_throttle_C",
+        "T_release_C",
+        "f_throttle",
+        "P_busy",
+    }
+    missing = sorted(required - set(th))
+    if missing:
+        raise SpecError(f"thermal(dynamic) 缺少 {missing}")
+    if float(th["tau_s"]) <= 0:
+        raise SpecError("thermal.tau_s 必须为正")
+    if float(th["R_th"]) <= 0:
+        raise SpecError("thermal.R_th 必须为正")
+    if float(th["T_release_C"]) >= float(th["T_throttle_C"]):
+        raise SpecError("thermal.T_release_C 须严格小于 T_throttle_C（滞回）")
+    if not (0.0 < float(th["f_throttle"]) <= 1.0):
+        raise SpecError("thermal.f_throttle 须在 (0, 1]")
+    if float(th["f_throttle"]) < float(th["f_min"]):
+        raise SpecError("thermal.f_throttle 不得低于 f_min")
+
+
 def validate_base(cfg: dict) -> None:
     _expect_keys(
         cfg,
@@ -214,7 +270,7 @@ def validate_base(cfg: dict) -> None:
         },
         "gpu",
     )
-    _expect_keys(cfg["thermal"], {"P_idle", "P_max", "gamma", "f_min"}, "thermal")
+    _validate_thermal(cfg["thermal"])
     _expect_keys(cfg["net"], {"link_gbps", "hop_latency_s"}, "net")
     _expect_keys(
         cfg["background"],

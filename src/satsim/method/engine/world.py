@@ -8,7 +8,8 @@ from dataclasses import dataclass
 import simpy
 
 from satsim.domain import Request
-from satsim.method.engine.timing import clock_factor, iter_time, kv_bytes_per_tok
+from satsim.method.engine.timing import iter_time, kv_bytes_per_tok
+from satsim.method.policies.thermal import thermal_from_cfg
 
 MAX_OUT = 2
 MAX_INFLIGHT = 8
@@ -224,6 +225,7 @@ class World:
             bundle = bundle_from_policy(policy)
         self.scheduler = bundle.scheduler
         self.link_cost = bundle.link_cost
+        self.thermal = thermal_from_cfg(cfg)
         self.rng = random.Random(int(seed) ^ 0xC0FFEE)
         self._install_background()
 
@@ -239,12 +241,14 @@ class World:
             self.net.add(path, float("inf"), priority=0, demand=per)
 
     def f_of(self, node: int, t: float) -> float:
-        p = self.cfg["thermal"]["P_max"]
-        for ev in self.cfg["thermal"].get("explicit_events") or []:
-            j, t0, t1, pc = ev
-            if j == node and t0 <= t < t1:
-                p = min(p, pc)
-        return clock_factor(p, self.cfg["thermal"])
+        return self.thermal.clock_factor(node, t)
+
+    def thermal_tick(self) -> None:
+        """控制周期推进热状态；倍率变化时打断解码。"""
+        loads = [len(rs) for rs in self.nodes]
+        if self.thermal.advance(self.env.now, loads):
+            for j in range(self.n):
+                self.poke_node(j)
 
     def _stats(self):
         nd = [len(rs) for rs in self.nodes]

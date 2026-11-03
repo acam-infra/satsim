@@ -1,4 +1,4 @@
-"""scheduler id + link_cost → 实现。"""
+"""scheduler id + link_cost → 实现；thermal 工厂见 policies.thermal。"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -10,6 +10,9 @@ from satsim.method.policies.schedulers.place_once import PlaceOnceScheduler
 from satsim.method.policies.schedulers.rebalance_free import RebalanceFreeScheduler
 from satsim.method.policies.schedulers.rebalance_ours import RebalanceOursScheduler
 from satsim.method.policies.schedulers.rebalance_random import RebalanceRandomScheduler
+from satsim.method.policies.thermal import thermal_from_cfg
+
+__all__ = ["PolicyBundle", "bundle_from_policy", "thermal_from_cfg"]
 
 
 @dataclass

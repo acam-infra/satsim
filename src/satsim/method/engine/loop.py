@@ -51,6 +51,7 @@ def control_proc(env: simpy.Environment, world: World):
     tend = float(world.cfg["arrival_window_s"]) + float(world.cfg["drain_s"])
     while env.now < tend:
         yield env.timeout(period)
+        world.thermal_tick()
         world.try_move()
 
 
