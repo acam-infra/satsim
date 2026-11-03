@@ -52,3 +52,6 @@ _Avoid_: STAC 复现, GPU 实测
 间隔服从 Gamma，用变异系数 CV 控突发；CV=1 退化为指数间隔（齐次泊松）。均值速率 `rate_per_s`，形状 k=1/CV²，尺度 θ=CV²/rate。
 _Avoid_: 任意突发模型, 实测 trace 复现
 
+**轨道连边快照**:
+仿真启动时由声明式壳层圆轨 + 距离门限生成的一次 ISL 邻接（`topology: orbit_planes`）；角色 sensing|compute 只作元数据。
+_Avoid_: Walker, 全星座引擎, 逐 tick 重连

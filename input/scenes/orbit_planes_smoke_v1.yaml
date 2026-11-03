@@ -1,0 +1,31 @@
+schema: satsim.scene/v1
+name: orbit_planes_smoke_v1
+story: |
+  两壳层声明式圆轨：sensing 两节点 + compute 两节点。
+  启动时按距离门限生成一次 ISL 邻接（同壳邻接 + 跨壳近距边，类 grid），
+  路径仍是图上 BFS；流体 Net / 迁移语义与 ring 相同。
+  本文件只做拓扑冒烟，不支撑 C1/C2 主表。
+not_modeled:
+  - 连续星历驱动
+  - 逐 tick 可见性重连
+  - Walker / 全星座规模
+  - 传感任务链与仅算力驻留约束（角色仅为元数据）
+  - 主实验 claim 数字
+mirrors:
+  cfg:
+    nodes: 4
+    topology: orbit_planes
+    arrival_window_s: 120.0
+    net.link_gbps: 10.0
+    background.gbps_per_node: 0
+    background.strict_priority: true
+    gpu.kv_gib: 24.0
+    workload.p_long: 0.2
+    cost.timeout_s: 120.0
+  spec:
+    t_swap.anchor: absolute
+    t_swap.t_s: 40
+    t_swap.P_cap: 80
+    trace.kind: poisson
+    trace.window_s: 60
+    trace.rate_per_s: 0.5

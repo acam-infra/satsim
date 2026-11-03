@@ -1,0 +1,65 @@
+# 两壳层轨道连边快照底稿：sensing×2 + compute×2，类 grid 跨轨 ISL。
+# 解析圆轨 + 距离门限；非 Walker、非时变星历（见 ADR 0003）。
+nodes: 4
+topology: orbit_planes
+arrival_window_s: 900.0
+drain_s: 1200
+control_period_s: 1.0
+model:
+  layers: 32
+  kv_heads: 8
+  head_dim: 128
+  bytes_per_elem: 2
+gpu:
+  kv_gib: 24.0
+  t_fixed_s: 0.003
+  t_weights_s: 0.01
+  t_kv_tok_s: 1.0e-7
+  t_seq_s: 5.0e-5
+  mem_freq_exp: 0.6
+thermal:
+  P_idle: 60
+  P_max: 300
+  gamma: 2.4
+  f_min: 0.35
+net:
+  link_gbps: 10.0
+  hop_latency_s: 0.005
+background:
+  gbps_per_node: 0.0
+  strict_priority: true
+  pairs:
+    - [0, 3]
+    - [1, 2]
+cost:
+  mode: free
+  timeout_s: 120.0
+  switch_s: 0.02
+workload:
+  p_long: 0.2
+orbit:
+  earth_radius_km: 6371.0
+  distance_threshold_km: 1500.0
+  same_plane_neighbors: true
+  plane_ring: true
+  planes:
+    - id: sensing
+      role: sensing
+      altitude_km: 500
+      inclination_deg: 97.0
+      raan_deg: 0.0
+      nodes:
+        - id: 0
+          true_anomaly_deg: 0
+        - id: 1
+          true_anomaly_deg: 40
+    - id: compute
+      role: compute
+      altitude_km: 550
+      inclination_deg: 97.0
+      raan_deg: 0.0
+      nodes:
+        - id: 2
+          true_anomaly_deg: 5
+        - id: 3
+          true_anomaly_deg: 45

@@ -28,9 +28,29 @@ class Flow:
     hops: int = 0
 
 
-def _bfs_path(n: int, s: int, d: int) -> list[tuple[int, int]]:
-    """Low-id BFS on the ring; background pairs use the same tie-break."""
-    adj = [sorted(((i + 1) % n, (i - 1) % n)) for i in range(n)]
+def ring_adjacency(n: int) -> list[list[int]]:
+    """经典环：每节点连左右邻（低 id 优先的排序留给 BFS）。"""
+    return [sorted(((i + 1) % n, (i - 1) % n)) for i in range(n)]
+
+
+def build_adjacency(cfg: dict) -> list[list[int]]:
+    """按 topology 得到邻接表；orbit_planes 在启动时生成一次快照边。"""
+    n = int(cfg["nodes"])
+    topo = cfg["topology"]
+    if topo == "ring":
+        return ring_adjacency(n)
+    if topo == "orbit_planes":
+        from satsim.physics.orbit_links import adjacency_from_edges, build_orbit_edges
+
+        edges = build_orbit_edges(cfg["orbit"], n)
+        return adjacency_from_edges(n, edges)
+    raise ValueError(f"未支持的 topology: {topo}")
+
+
+def _bfs_path(adj: list[list[int]], s: int, d: int) -> list[tuple[int, int]]:
+    """Low-id BFS on an undirected adjacency; background pairs use the same tie-break."""
+    if s == d:
+        return []
     prev: dict[int, int | None] = {s: None}
     q = [s]
     while q:
@@ -39,6 +59,8 @@ def _bfs_path(n: int, s: int, d: int) -> list[tuple[int, int]]:
             if v not in prev:
                 prev[v] = u
                 q.append(v)
+    if d not in prev:
+        raise ValueError(f"无路径 {s} → {d}")
     hop = []
     x = d
     while prev[x] is not None:
@@ -191,6 +213,7 @@ class World:
         self.policy = policy
         self.t_swap = t_swap
         self.n = cfg["nodes"]
+        self.adj = build_adjacency(cfg)
         self.net = Net(env, cfg)
         self.nodes: list[list[Req]] = [[] for _ in range(self.n)]
         self.acc = dict(mig=0, abort=0, mig_bytes=0.0, max_flows_on_link=0)
@@ -212,7 +235,7 @@ class World:
             return
         per = total / len(pairs)
         for s, d in pairs:
-            path = _bfs_path(self.n, s, d)
+            path = _bfs_path(self.adj, s, d)
             self.net.add(path, float("inf"), priority=0, demand=per)
 
     def f_of(self, node: int, t: float) -> float:
@@ -257,7 +280,7 @@ class World:
             self.poke_node(req.node)
 
     def pick_path(self, s: int, d: int) -> list[tuple[int, int]]:
-        return _bfs_path(self.n, s, d)
+        return _bfs_path(self.adj, s, d)
 
     def try_move(self) -> None:
         self.scheduler.maybe_rebalance(self)

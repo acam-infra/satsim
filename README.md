@@ -7,24 +7,40 @@ uv sync
 .venv/bin/satsim configs/s1_cost_claims_v3.yaml
 .venv/bin/satsim configs/poisson_smoke_v1.yaml   # 泊松冒烟
 .venv/bin/satsim configs/gamma_smoke_v1.yaml     # Gamma 到达冒烟（cv 控突发）
+.venv/bin/satsim configs/orbit_planes_smoke_v1.yaml  # 轨道连边快照冒烟
+.venv/bin/satsim configs/orbit_planes_s1_cost_claims_v1.yaml  # 轨道拓扑三档 e2e
 .venv/bin/python scripts/plot_gamma_cv_latency.py  # CV∈{1,2,4,8} latency CDF / p99
 .venv/bin/pytest
 ```
 
-## 主结果（`s1_cost_claims_v3`，多种子均值）
+## 主结果（环 `s1_cost_claims_v3`，多种子均值）
 
-相对无消耗再分配（**粗体**为该列最优；箭头表示期望方向）。
+基线 **place_once**；括号内为相对基线；**粗体**为该列最优。
 
-| 臂 | 档 | good_long ↑ | goodput ↑ | vs free | link_traffic_GB ↓ | abort ↓ |
-|---|---|---:|---:|---:|---:|---:|
-| place_once | 1 首次 | 12.8 | 242.8 | −31.9% | 0 | 0 |
-| **rebalance_free** | 2 无消耗 | **19.2** | **356.6** | — | **0** | **0** |
-| rebalance_random | 3 有消耗·随机 | 14.4 | 271.3 | −23.9% | 37.8 | 9.2 |
-| rebalance_ours | 3 有消耗·TODO | 12.8 | 242.8 | −31.9% | 0 | 0 |
+| 臂 | good_long ↑ | goodput ↑ | link_GB ↓ | abort ↓ |
+|---|---|---|---|---|
+| place_once | 12.8 | 242.8 | 0 | 0 |
+| **free** | **19.2 (+50%)** | **356.6 (+46.9%)** | **0** | **0** |
+| random | 14.4 (+12.5%) | 271.3 (+11.7%) | 37.8 | 9.2 |
+| ours (TODO) | 12.8 (0%) | 242.8 (0%) | 0 | 0 |
 
-- **C1**：首次 → 无消耗：good_long 12.8→19.2；goodput **+46.9%**。
-- **C2**：无消耗 → 有消耗随机：goodput **−23.9%**；abort≈9.2（关背景后 abort→0，仍慢于 free）。
-- **ours**：占位，`mig=0`，表现同首次分配；待实现。
+- **C1**：free 相对首次明显更好（goodput **+46.9%**）。
+- **C2**：random 相对 free 掉回（271 vs 357，约 **−23.9%**），abort≈9.2。
+- **ours**：占位，同首次；待实现。
+
+## 轨道连边快照（`orbit_planes_s1_cost_claims_v1`）
+
+`topology: orbit_planes`，sensing×2 + compute×2 类 grid；seeds 1–5；基线同样是 **place_once**。
+
+| 臂 | good_long ↑ | goodput ↑ | link_GB ↓ | abort ↓ |
+|---|---|---|---|---|
+| place_once | 12.8 | 242.8 | 0 | 0 |
+| **free** | **19.2 (+50%)** | **356.6 (+46.9%)** | **0** | **0** |
+| random | 14.0 (+9.4%) | 264.2 (+8.8%) | 31.6 | 0 |
+| random_nobg | 15.0 (+17%) | 282.0 (+16%) | 30.4 | 0 |
+
+- 跨轨 grid 上 C1 与环同量级；random 只小幅好于首次，相对 free 约 **−25.9%**（nobg 仍约 **−20.9%**）——链路迁移本身在拖，abort 尚未逼出。
+- 跑：`.venv/bin/satsim configs/orbit_planes_s1_cost_claims_v1.yaml`；ADR：`docs/adr/0003-orbit-planes-topology-snapshot.md`。
 
 ## 吞吐定义
 
@@ -45,7 +61,8 @@ uv sync
 
 1. 术语：`GLOSSARY.md`
 2. 三档决策：`docs/adr/0002-three-tier-schedulers.md`
-3. 插件规格：`docs/SPEC_PLUGIN_FRAMEWORK.md`
-4. YAML：`scheduler` + `link_cost`（见 `configs/`）
+3. 轨道连边快照：`docs/adr/0003-orbit-planes-topology-snapshot.md`
+4. 插件规格：`docs/SPEC_PLUGIN_FRAMEWORK.md`
+5. YAML：`scheduler` + `link_cost`（见 `configs/`）
 
 输入在 `input/`（或 `configs/` symlink）；方法在 `src/satsim/method/`（全局 Scheduler）；输出在 `src/satsim/output/`。

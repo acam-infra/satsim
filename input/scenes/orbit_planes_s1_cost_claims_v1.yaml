@@ -1,0 +1,32 @@
+schema: satsim.scene/v1
+name: orbit_planes_s1_cost_claims_v1
+story: |
+  两壳层轨道连边快照（sensing×2 + compute×2）上的三档 e2e。
+  启动时按距离门限生成一次 ISL（边表为 (0,1)(0,2)(1,3)(2,3)，类 2×2 grid）；
+  过境合成与功率帽换位、背景流、C1/C2 口径与 ring 的 stac_s1_cost_claims_v3 对齐，
+  只换拓扑来源：orbit_planes 快照而非写死 ring。
+not_modeled:
+  - 连续星历驱动
+  - 逐 tick 可见性重连
+  - Walker / 全星座规模
+  - 传感任务链与仅算力驻留约束（角色仅为元数据）
+  - 热容/食季 ODE
+mirrors:
+  cfg:
+    nodes: 4
+    topology: orbit_planes
+    arrival_window_s: 900.0
+    net.link_gbps: 10.0
+    background.gbps_per_node: 2.75
+    background.strict_priority: true
+    gpu.kv_gib: 24.0
+    workload.p_long: 0.2
+    cost.timeout_s: 120.0
+  spec:
+    t_swap.anchor: max_cluster
+    t_swap.offset_s: 40
+    t_swap.P_cap: 80
+    trace.kind: synthetic_pass
+    trace.compress_horizon_s: 60
+    trace.pack_window_s: 900
+    trace.target_n: 88

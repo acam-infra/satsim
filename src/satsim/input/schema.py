@@ -78,6 +78,80 @@ def _expect_keys(obj: dict, allowed: set[str], where: str) -> None:
         raise SpecError(f"{where} 有未准入字段 {sorted(extra)}")
 
 
+def _validate_orbit_block(orbit: dict, n: int) -> None:
+    """orbit_planes 的声明式壳层；生成边在 World 启动时做。"""
+    if not isinstance(orbit, dict):
+        raise SpecError("orbit 必须是映射")
+    _expect_keys(
+        orbit,
+        {
+            "earth_radius_km",
+            "distance_threshold_km",
+            "same_plane_neighbors",
+            "plane_ring",
+            "planes",
+        },
+        "orbit",
+    )
+    if "planes" not in orbit or not isinstance(orbit["planes"], list) or not orbit["planes"]:
+        raise SpecError("orbit.planes 不能为空")
+    if "distance_threshold_km" not in orbit:
+        raise SpecError("orbit 需要 distance_threshold_km")
+    if float(orbit["distance_threshold_km"]) <= 0:
+        raise SpecError("distance_threshold_km 必须为正")
+    if "earth_radius_km" in orbit and float(orbit["earth_radius_km"]) <= 0:
+        raise SpecError("earth_radius_km 必须为正")
+    for key in ("same_plane_neighbors", "plane_ring"):
+        if key in orbit and not isinstance(orbit[key], bool):
+            raise SpecError(f"orbit.{key} 必须是 bool")
+    seen: set[int] = set()
+    for i, plane in enumerate(orbit["planes"]):
+        if not isinstance(plane, dict):
+            raise SpecError(f"orbit.planes[{i}] 必须是映射")
+        _expect_keys(
+            plane,
+            {
+                "id",
+                "role",
+                "altitude_km",
+                "inclination_deg",
+                "raan_deg",
+                "nodes",
+            },
+            f"orbit.planes[{i}]",
+        )
+        if plane.get("role") not in ("sensing", "compute"):
+            raise SpecError(f"orbit.planes[{i}].role 只准入 sensing|compute")
+        if float(plane["altitude_km"]) <= 0:
+            raise SpecError(f"orbit.planes[{i}].altitude_km 必须为正")
+        nodes = plane.get("nodes")
+        if not isinstance(nodes, list) or not nodes:
+            raise SpecError(f"orbit.planes[{i}].nodes 不能为空")
+        for j, node in enumerate(nodes):
+            if not isinstance(node, dict):
+                raise SpecError(f"orbit.planes[{i}].nodes[{j}] 必须是映射")
+            _expect_keys(node, {"id", "true_anomaly_deg"}, f"orbit.planes[{i}].nodes[{j}]")
+            nid = node["id"]
+            if not isinstance(nid, int) or not 0 <= nid < n:
+                raise SpecError(f"节点 id 必须在 [0, {n})：得 {nid}")
+            if nid in seen:
+                raise SpecError(f"节点 id {nid} 重复")
+            seen.add(nid)
+    if seen != set(range(n)):
+        raise SpecError(f"orbit 必须覆盖全部节点 0..{n - 1}，现有 {sorted(seen)}")
+    # 连通性：与 World 同一生成器，拒绝一启动就拆开的图
+    from satsim.physics.orbit_links import (
+        adjacency_from_edges,
+        build_orbit_edges,
+        graph_is_connected,
+    )
+
+    edges = build_orbit_edges(orbit, n)
+    adj = adjacency_from_edges(n, edges)
+    if not graph_is_connected(n, adj):
+        raise SpecError("orbit 生成的邻接图不连通；加大 distance_threshold_km 或打开 same_plane_neighbors")
+
+
 def validate_base(cfg: dict) -> None:
     _expect_keys(
         cfg,
@@ -94,15 +168,29 @@ def validate_base(cfg: dict) -> None:
             "background",
             "cost",
             "workload",
+            "orbit",  # 仅 topology=orbit_planes 时使用
         },
         "base",
     )
     if float(cfg["drain_s"]) <= 0 or float(cfg["control_period_s"]) <= 0:
         raise SpecError("drain_s 和 control_period_s 必须为正")
-    if cfg["topology"] != "ring":
-        raise SpecError("topology 只准入 ring（紧凑舱段的邻接，不是全星座）")
-    if not isinstance(cfg["nodes"], int) or not 2 <= cfg["nodes"] <= 8:
-        raise SpecError("nodes 只准入 2..8 的环")
+    topo = cfg["topology"]
+    if topo not in ("ring", "orbit_planes"):
+        raise SpecError("topology 只准入 ring | orbit_planes")
+    if not isinstance(cfg["nodes"], int):
+        raise SpecError("nodes 必须是整数")
+    n = cfg["nodes"]
+    if topo == "ring":
+        if not 2 <= n <= 8:
+            raise SpecError("ring 的 nodes 只准入 2..8")
+        if "orbit" in cfg:
+            raise SpecError("topology=ring 时不准写 orbit")
+    else:
+        if not 2 <= n <= 16:
+            raise SpecError("orbit_planes 的 nodes 只准入 2..16（见 ADR 0003）")
+        if "orbit" not in cfg:
+            raise SpecError("topology=orbit_planes 需要 orbit 块")
+        _validate_orbit_block(cfg["orbit"], n)
     _expect_keys(cfg["model"], {"layers", "kv_heads", "head_dim", "bytes_per_elem"}, "model")
     _expect_keys(
         cfg["gpu"],
