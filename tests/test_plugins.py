@@ -81,3 +81,25 @@ def test_scheduler_link_cost_mismatch_refused(tmp_path: Path):
     )
     with pytest.raises(SpecError, match="link_cost 只准入"):
         resolve_spec(_detached(text, tmp_path / "bad_lc.yaml"))
+
+
+def test_gamma_arrival_cv1_and_run():
+    from satsim.input.generate.dispatch import generate_arrivals
+    from satsim.input.generate.gamma import GammaArrival
+
+    trace = dict(
+        kind="gamma",
+        window_s=60,
+        rate_per_s=0.5,
+        cv=1.0,
+        token_pad=dict(mode="floor", long_out=100, long_pin=50, short_out=10, short_pin=5),
+    )
+    reqs, anchor, count = GammaArrival().generate(trace, p_long=0.2, seed=1)
+    assert len(reqs) >= 1
+    assert count >= 1
+    # high CV still produces arrivals
+    reqs2, _, _ = generate_arrivals({**trace, "cv": 8.0}, 0.2, 2)
+    assert len(reqs2) >= 1
+    payload = run_spec(ROOT / "input" / "scenarios" / "gamma_smoke_v1.yaml", outdir=None)
+    assert payload["T_SWAP"] == pytest.approx(60.0)
+    assert "place_once" in payload["claims"]["policies"]

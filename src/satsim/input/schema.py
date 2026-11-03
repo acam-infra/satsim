@@ -38,6 +38,13 @@ POISSON_DEFAULTS = {
     "jitter_s": 0.0,
 }
 
+GAMMA_DEFAULTS = {
+    "window_s": 60.0,
+    "rate_per_s": 0.1,
+    "cv": 1.0,
+    "jitter_s": 0.0,
+}
+
 
 class SpecError(ValueError):
     pass
@@ -182,7 +189,41 @@ def validate_trace(trace: dict) -> None:
         if "target_n" in trace and int(trace["target_n"]) < 1:
             raise SpecError("target_n 至少为 1")
         return
-    raise SpecError("trace.kind 只准入 synthetic_pass / poisson")
+    if kind == "gamma":
+        allowed = {
+            "kind",
+            "window_s",
+            "compress_horizon_s",
+            "rate_per_s",
+            "cv",
+            "jitter_s",
+            "target_n",
+            "token_pad",
+            "pack_window_s",
+        }
+        _expect_keys(trace, allowed, "trace")
+        if "token_pad" not in trace:
+            raise SpecError("gamma 需要 token_pad")
+        _validate_token_pad(trace["token_pad"])
+        if "window_s" not in trace and "compress_horizon_s" not in trace:
+            trace["window_s"] = GAMMA_DEFAULTS["window_s"]
+        if "rate_per_s" not in trace:
+            trace["rate_per_s"] = GAMMA_DEFAULTS["rate_per_s"]
+        if "cv" not in trace:
+            trace["cv"] = GAMMA_DEFAULTS["cv"]
+        if "jitter_s" not in trace:
+            trace["jitter_s"] = GAMMA_DEFAULTS["jitter_s"]
+        window = float(trace.get("window_s") or trace.get("compress_horizon_s"))
+        rate = float(trace["rate_per_s"])
+        cv = float(trace["cv"])
+        if window <= 0 or rate <= 0:
+            raise SpecError("gamma 需要 window_s > 0 且 rate_per_s > 0")
+        if cv <= 0:
+            raise SpecError("gamma 需要 cv > 0")
+        if "target_n" in trace and int(trace["target_n"]) < 1:
+            raise SpecError("target_n 至少为 1")
+        return
+    raise SpecError("trace.kind 只准入 synthetic_pass / poisson / gamma")
 
 
 def _coerce_id(value: Any) -> str:

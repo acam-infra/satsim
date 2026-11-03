@@ -6,6 +6,8 @@
 uv sync
 .venv/bin/satsim configs/s1_cost_claims_v3.yaml
 .venv/bin/satsim configs/poisson_smoke_v1.yaml   # 泊松冒烟
+.venv/bin/satsim configs/gamma_smoke_v1.yaml     # Gamma 到达冒烟（cv 控突发）
+.venv/bin/python scripts/plot_gamma_cv_latency.py  # CV∈{1,2,4,8} latency CDF / p99
 .venv/bin/pytest
 ```
 

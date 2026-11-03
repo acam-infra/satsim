@@ -1,0 +1,39 @@
+# Gamma 到达冒烟（cv=1 ≈ 泊松）
+name: gamma_smoke_v1
+base: construct_s1.yaml
+trace:
+  kind: gamma
+  window_s: 120
+  rate_per_s: 0.4
+  cv: 1.0
+  jitter_s: 0.0
+  token_pad:
+    mode: floor
+    long_out: 16000
+    long_pin: 8000
+    short_out: 200
+    short_pin: 500
+t_swap:
+  anchor: absolute
+  t_s: 60
+  P_cap: 80
+overrides:
+  arrival_window_s: 180.0
+  background.gbps_per_node: 0
+  background.strict_priority: true
+  net.link_gbps: 10.0
+  gpu.kv_gib: 24.0
+policies:
+  place_once:
+    scheduler: place_once
+    link_cost: "off"
+  rebalance_free:
+    scheduler: rebalance_free
+    link_cost: "off"
+    hysteresis: 0.15
+seeds: [1, 2]
+slo:
+  tpot_slo: 0.032
+evidence: sim_gamma_smoke
+metadata:
+  scene: ../scenes/gamma_smoke_v1.yaml
