@@ -1,5 +1,5 @@
 schema: satsim.scene/v1
-name: gamma_smoke_v1
+name: scene_gamma_smoke_v1
 story: |
   Gamma 间隔到达冒烟（CV 控突发）。cv=1 退化为泊松。
   换位用 absolute。

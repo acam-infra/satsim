@@ -9,8 +9,8 @@ import pytest
 from satsim.__main__ import run_spec
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = ROOT / "input" / "scenarios" / "stac_s1_cost_claims_v3.yaml"
-GOLDEN = ROOT / "tests" / "golden" / "stac_s1_cost_claims_v3.claims_excerpt.json"
+SPEC = ROOT / "input" / "scenarios" / "exp_ring_s1_cost_claims_v3.yaml"
+GOLDEN = ROOT / "tests" / "golden" / "exp_ring_s1_cost_claims_v3.claims_excerpt.json"
 
 
 def _excerpt(payload: dict) -> dict:

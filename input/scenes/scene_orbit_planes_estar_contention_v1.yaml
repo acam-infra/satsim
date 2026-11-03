@@ -1,0 +1,30 @@
+schema: satsim.scene/v1
+name: scene_orbit_planes_estar_contention_v1
+story: |
+  两壳层 orbit_planes 快照上的跨轨 E★ 加严争用叙事。
+  换位后暗 0+1、亮 2+3；有代价臂 sync_burst 迁向 node2，路径共享 E★=(0,2)。
+  本文件只作叙事镜像；入口是 scripts/exp_orbit_estar_contention.py
+  （配置 configs/exp_orbit_planes_estar_contention_v1.yaml），不走普通 satsim policies 复现。
+not_modeled:
+  - 普通 policies/metadata 驱动的 resolve_spec 入口
+  - 连续星历 / 时变重连
+  - 主论文 C1/C2 表（本文件支撑的是争用加压脚本）
+mirrors:
+  cfg:
+    nodes: 4
+    topology: orbit_planes
+    arrival_window_s: 900.0
+    net.link_gbps: 0.5
+    background.gbps_per_node: 0.0
+    background.strict_priority: true
+    gpu.kv_gib: 24.0
+    workload.p_long: 0.2
+    cost.timeout_s: 30.0
+  spec:
+    t_swap.anchor: max_cluster
+    t_swap.offset_s: 40
+    t_swap.P_cap: 80
+    trace.kind: synthetic_pass
+    trace.compress_horizon_s: 60
+    trace.pack_window_s: 900
+    trace.target_n: 88

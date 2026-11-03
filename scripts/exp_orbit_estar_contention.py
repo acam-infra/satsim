@@ -33,7 +33,7 @@ from satsim.method.registry import PolicyBundle, bundle_from_policy
 from satsim.output.metrics import row_from_run
 
 ROOT = Path(__file__).resolve().parents[1]
-EXP = ROOT / "configs" / "orbit_planes_estar_contention_v1.yaml"
+EXP = (ROOT / "configs" / "exp_orbit_planes_estar_contention_v1.yaml").resolve()
 OUT = ROOT / "runs"
 DEFAULT_INF, DEFAULT_OUT = 8, 2
 ESTAR = (0, 2)

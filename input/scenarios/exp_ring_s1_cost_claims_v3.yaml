@@ -4,8 +4,8 @@
 #   3) rebalance_random / rebalance_ours — 有消耗再分配（random 基线；ours=TODO）
 # C1: place_once vs rebalance_free
 # C2: rebalance_free vs rebalance_random（*_nobg 对照）
-name: stac_s1_cost_claims_v3
-base: construct_s1.yaml
+name: exp_ring_s1_cost_claims_v3
+base: base_ring_s1.yaml
 trace:
   kind: synthetic_pass
   compress_horizon_s: 60
@@ -58,4 +58,4 @@ slo:
   tpot_slo: 0.032
 evidence: sim_synthetic_pass_power_ISL
 metadata:
-  scene: ../scenes/inferred_orbit_pod_v3.yaml
+  scene: ../scenes/scene_inferred_orbit_pod_v3.yaml

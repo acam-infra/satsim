@@ -1,5 +1,5 @@
 schema: satsim.scene/v1
-name: poisson_smoke_v1
+name: scene_poisson_smoke_v1
 story: |
   与主实验同构的四节点环，到达改为齐次泊松（线下生成）。
   换位时刻用 absolute，避免多种子锚点漂移。

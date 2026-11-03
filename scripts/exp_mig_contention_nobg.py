@@ -32,7 +32,7 @@ from satsim.method.registry import bundle_from_policy
 from satsim.output.metrics import row_from_run
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = ROOT / "input" / "scenarios" / "stac_s1_cost_claims_v3.yaml"
+SPEC = ROOT / "input" / "scenarios" / "exp_ring_s1_cost_claims_v3.yaml"
 OUT = ROOT / "runs"
 SLO = 0.032
 SEEDS = [1, 2, 3, 4, 5]

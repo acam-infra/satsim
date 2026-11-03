@@ -1,5 +1,5 @@
 {
-  "name": "stac_s1_cost_claims_v3",
+  "name": "exp_ring_s1_cost_claims_v3",
   "T_SWAP": 100.0,
   "C1": {
     "first_good_long": 12.8,

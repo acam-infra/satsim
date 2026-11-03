@@ -17,9 +17,9 @@ from satsim.physics.orbit_links import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-SMOKE = ROOT / "input" / "scenarios" / "orbit_planes_smoke_v1.yaml"
-BASE_ORBIT = ROOT / "input" / "scenarios" / "construct_orbit_planes_s1.yaml"
-RING_SMOKE = ROOT / "input" / "scenarios" / "poisson_smoke_v1.yaml"
+SMOKE = ROOT / "input" / "scenarios" / "exp_orbit_planes_smoke_v1.yaml"
+BASE_ORBIT = ROOT / "input" / "scenarios" / "base_orbit_planes_s1.yaml"
+RING_SMOKE = ROOT / "input" / "scenarios" / "exp_poisson_smoke_v1.yaml"
 
 
 def _orbit_fixture() -> dict:
@@ -90,7 +90,7 @@ def test_ring_rejects_orbit_block():
     import copy
     import yaml
 
-    cfg = yaml.safe_load((ROOT / "input" / "scenarios" / "construct_s1.yaml").read_text())
+    cfg = yaml.safe_load((ROOT / "input" / "scenarios" / "base_ring_s1.yaml").read_text())
     cfg = copy.deepcopy(cfg)
     cfg["orbit"] = _orbit_fixture()
     with pytest.raises(SpecError, match="ring 时不准写 orbit"):

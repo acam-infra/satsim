@@ -13,24 +13,24 @@ from satsim.input.schema import SpecError
 from satsim.method.registry import bundle_from_policy
 
 ROOT = Path(__file__).resolve().parents[1]
-MAIN = ROOT / "input" / "scenarios" / "stac_s1_cost_claims_v3.yaml"
-POISSON = ROOT / "input" / "scenarios" / "poisson_smoke_v1.yaml"
-SCENE = ROOT / "input" / "scenes" / "inferred_orbit_pod_v3.yaml"
-CONFIGS = ROOT / "configs" / "s1_cost_claims_v3.yaml"
+MAIN = ROOT / "input" / "scenarios" / "exp_ring_s1_cost_claims_v3.yaml"
+POISSON = ROOT / "input" / "scenarios" / "exp_poisson_smoke_v1.yaml"
+SCENE = ROOT / "input" / "scenes" / "scene_inferred_orbit_pod_v3.yaml"
+CONFIGS = ROOT / "configs" / "exp_ring_s1_cost_claims_v3.yaml"
 
 
 def _detached(text: str, dest: Path) -> Path:
     text = text.replace(
-        "base: construct_s1.yaml",
-        f"base: {ROOT / 'input' / 'scenarios' / 'construct_s1.yaml'}",
+        "base: base_ring_s1.yaml",
+        f"base: {ROOT / 'input' / 'scenarios' / 'base_ring_s1.yaml'}",
     )
     text = text.replace(
-        "scene: ../scenes/inferred_orbit_pod_v3.yaml",
+        "scene: ../scenes/scene_inferred_orbit_pod_v3.yaml",
         f"scene: {SCENE}",
     )
     text = text.replace(
-        "scene: ../scenes/poisson_smoke_v1.yaml",
-        f"scene: {ROOT / 'input' / 'scenes' / 'poisson_smoke_v1.yaml'}",
+        "scene: ../scenes/scene_poisson_smoke_v1.yaml",
+        f"scene: {ROOT / 'input' / 'scenes' / 'scene_poisson_smoke_v1.yaml'}",
     )
     dest.write_text(text)
     return dest
@@ -100,6 +100,6 @@ def test_gamma_arrival_cv1_and_run():
     # high CV still produces arrivals
     reqs2, _, _ = generate_arrivals({**trace, "cv": 8.0}, 0.2, 2)
     assert len(reqs2) >= 1
-    payload = run_spec(ROOT / "input" / "scenarios" / "gamma_smoke_v1.yaml", outdir=None)
+    payload = run_spec(ROOT / "input" / "scenarios" / "exp_gamma_smoke_v1.yaml", outdir=None)
     assert payload["T_SWAP"] == pytest.approx(60.0)
     assert "place_once" in payload["claims"]["policies"]

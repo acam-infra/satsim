@@ -3,8 +3,8 @@
 #   - 长度 CSV 由 scripts/prep_sharegpt_lengths.py 导出（默认 char/4；无 HF tokenizer）
 #   - len_scale=10：把近似长度拉到更接近本仓 synthetic pad 的压力量级，否则 C1≈0
 #   - 到达压进 40s 窗 + tpot_slo=0.02，才能在换位功率帽下分出三臂
-name: sharegpt_s1_smoke_v1
-base: construct_s1.yaml
+name: exp_sharegpt_s1_smoke_v1
+base: base_ring_s1.yaml
 trace:
   kind: sharegpt
   path: input/datasets/sharegpt_lengths_v1.csv
@@ -42,4 +42,4 @@ slo:
   tpot_slo: 0.02
 evidence: sim_sharegpt_smoke
 metadata:
-  scene: ../scenes/sharegpt_s1_smoke_v1.yaml
+  scene: ../scenes/scene_sharegpt_s1_smoke_v1.yaml

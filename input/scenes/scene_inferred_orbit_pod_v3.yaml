@@ -1,5 +1,5 @@
 schema: satsim.scene/v1
-name: inferred_orbit_pod_v3
+name: scene_inferred_orbit_pod_v3
 story: |
   四颗星组成同一轨道面上的紧凑计算舱段，不是全星座。
   一次对地过境被压进 compress_horizon_s，请求在这段里到达；

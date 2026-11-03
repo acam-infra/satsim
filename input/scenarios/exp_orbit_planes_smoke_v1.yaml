@@ -1,6 +1,6 @@
 # 轨道连边快照冒烟（sensing + compute 两壳层）
-name: orbit_planes_smoke_v1
-base: construct_orbit_planes_s1.yaml
+name: exp_orbit_planes_smoke_v1
+base: base_orbit_planes_s1.yaml
 trace:
   kind: poisson
   window_s: 60
@@ -35,4 +35,4 @@ slo:
   tpot_slo: 0.032
 evidence: sim_orbit_planes_smoke
 metadata:
-  scene: ../scenes/orbit_planes_smoke_v1.yaml
+  scene: ../scenes/scene_orbit_planes_smoke_v1.yaml

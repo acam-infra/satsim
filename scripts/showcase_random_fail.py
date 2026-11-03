@@ -22,7 +22,7 @@ from satsim.method.registry import bundle_from_policy
 from satsim.output.metrics import row_from_run
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = ROOT / "input" / "scenarios" / "stac_s1_cost_claims_v3.yaml"
+SPEC = ROOT / "input" / "scenarios" / "exp_ring_s1_cost_claims_v3.yaml"
 OUT = ROOT / "runs"
 ARMS = ("place_once", "rebalance_free", "rebalance_random")
 SLO = 0.032
@@ -247,7 +247,7 @@ def main() -> None:
     ax = axes[1]
     ax.axis("off")
     mline = [
-        f"stac_s1_cost_claims_v3  seed={seed}  T_SWAP={t_swap_s:.1f}s  P_cap={p_cap}",
+        f"exp_ring_s1_cost_claims_v3  seed={seed}  T_SWAP={t_swap_s:.1f}s  P_cap={p_cap}",
         "",
         f"{'arm':16} {'good_long':>9} {'goodput':>9} {'mig':>4} {'abort':>5} {'linkGB':>7}",
     ]
@@ -289,7 +289,7 @@ def main() -> None:
     sp0 = spotlight[0] if spotlight else {}
     brief = {
         "story_zh": (
-            f"场景 stac_s1_cost_claims_v3、种子 {seed}：功率帽换位 T_SWAP={t_swap_s:.0f}s 前，"
+            f"场景 exp_ring_s1_cost_claims_v3、种子 {seed}：功率帽换位 T_SWAP={t_swap_s:.0f}s 前，"
             f"node2 已被压到 P={p_cap}。free 几乎不乱动，换位后把人从暗星迁到亮星"
             f"（good_long {mf['good_long']}/{mf['n_long']}）。"
             f"random 却在换位前乱迁：例如 t≈{sp0.get('t_start', '?')}s 把长请求 "

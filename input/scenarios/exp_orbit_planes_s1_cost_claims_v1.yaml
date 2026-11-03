@@ -1,8 +1,8 @@
-# orbit_planes 上的三档 e2e（与 stac_s1 同旋钮，拓扑换成轨道连边快照）
+# orbit_planes 上的三档 e2e（与 exp_ring_s1 同旋钮，拓扑换成轨道连边快照）
 # C1: place_once vs rebalance_free
 # C2: rebalance_free vs rebalance_random（*_nobg 对照）
-name: orbit_planes_s1_cost_claims_v1
-base: construct_orbit_planes_s1.yaml
+name: exp_orbit_planes_s1_cost_claims_v1
+base: base_orbit_planes_s1.yaml
 trace:
   kind: synthetic_pass
   compress_horizon_s: 60
@@ -52,4 +52,4 @@ slo:
   tpot_slo: 0.032
 evidence: sim_orbit_planes_s1_cost_claims
 metadata:
-  scene: ../scenes/orbit_planes_s1_cost_claims_v1.yaml
+  scene: ../scenes/scene_orbit_planes_s1_cost_claims_v1.yaml

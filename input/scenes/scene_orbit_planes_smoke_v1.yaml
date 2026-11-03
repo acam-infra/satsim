@@ -1,5 +1,5 @@
 schema: satsim.scene/v1
-name: orbit_planes_smoke_v1
+name: scene_orbit_planes_smoke_v1
 story: |
   两壳层声明式圆轨：sensing 两节点 + compute 两节点。
   启动时按距离门限生成一次 ISL 邻接（同壳邻接 + 跨壳近距边，类 grid），

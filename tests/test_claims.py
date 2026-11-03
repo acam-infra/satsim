@@ -7,8 +7,8 @@ from satsim.input.load import resolve_spec
 from satsim.input.schema import SpecError
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = ROOT / "input" / "scenarios" / "stac_s1_cost_claims_v3.yaml"
-SCENE = ROOT / "input" / "scenes" / "inferred_orbit_pod_v3.yaml"
+SPEC = ROOT / "input" / "scenarios" / "exp_ring_s1_cost_claims_v3.yaml"
+SCENE = ROOT / "input" / "scenes" / "scene_inferred_orbit_pod_v3.yaml"
 
 
 def test_scene_is_not_a_run():
@@ -18,11 +18,11 @@ def test_scene_is_not_a_run():
 
 def _detached(text: str, dest: Path) -> Path:
     text = text.replace(
-        "base: construct_s1.yaml",
-        f"base: {ROOT / 'input' / 'scenarios' / 'construct_s1.yaml'}",
+        "base: base_ring_s1.yaml",
+        f"base: {ROOT / 'input' / 'scenarios' / 'base_ring_s1.yaml'}",
     )
     text = text.replace(
-        "scene: ../scenes/inferred_orbit_pod_v3.yaml",
+        "scene: ../scenes/scene_inferred_orbit_pod_v3.yaml",
         f"scene: {SCENE}",
     )
     dest.write_text(text)

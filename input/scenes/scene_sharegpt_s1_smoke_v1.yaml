@@ -1,5 +1,5 @@
 schema: satsim.scene/v1
-name: sharegpt_s1_smoke_v1
+name: scene_sharegpt_s1_smoke_v1
 story: |
   四节点环；ShareGPT 长度 CSV + 定间隔到达（EcoServe 风格，无时间戳）。
   CSV 默认 char/4 近似；冒烟用 len_scale=10 加压。long = 缩放后 pin+pout >= 1500。

@@ -1,10 +1,11 @@
 # 跨轨 E★ 加严争用（入口：scripts/exp_orbit_estar_contention.py）
+# 叙事镜像：../scenes/scene_orbit_planes_estar_contention_v1.yaml（本文件不走 resolve_spec）
 # 拓扑：orbit_planes 2×2 grid；E★=(0,2)
 # 功率：换位后暗 0+1、亮 2+3（place_once 仍有亮星可活）；有代价臂目标收束到 2
 # 突发：控制拍内尽量填满 inflight（sync_burst）
 # 主轴 link_gbps；辅 timeout / control / caps；bg=0
-name: orbit_planes_estar_contention_v1
-base: construct_orbit_planes_s1.yaml
+name: exp_orbit_planes_estar_contention_v1
+base: base_orbit_planes_s1.yaml
 trace:
   kind: synthetic_pass
   compress_horizon_s: 60

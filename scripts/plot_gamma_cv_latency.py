@@ -45,7 +45,7 @@ POLICIES = {
 
 
 def make_base_cfg() -> dict:
-    cfg = load_yaml(ROOT / "input" / "scenarios" / "construct_s1.yaml")
+    cfg = load_yaml(ROOT / "input" / "scenarios" / "base_ring_s1.yaml")
     validate_base(cfg)
     cfg["arrival_window_s"] = ARRIVAL_WINDOW
     cfg["drain_s"] = DRAIN

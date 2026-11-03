@@ -15,7 +15,7 @@ from satsim.input.schema import SpecError, validate_trace
 
 ROOT = Path(__file__).resolve().parents[1]
 CSV = ROOT / "input" / "datasets" / "sharegpt_lengths_v1.csv"
-SPEC = ROOT / "input" / "scenarios" / "sharegpt_s1_smoke_v1.yaml"
+SPEC = ROOT / "input" / "scenarios" / "exp_sharegpt_s1_smoke_v1.yaml"
 
 
 def _write_csv(path: Path, rows: list[tuple[int, int]]) -> None:
