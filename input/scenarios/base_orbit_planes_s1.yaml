@@ -1,5 +1,5 @@
-# 两壳层轨道连边快照底稿：sensing×2 + compute×2，类 grid 跨轨 ISL。
-# 解析圆轨 + 距离门限；非 Walker、非时变星历（见 ADR 0003）。
+# 双轨静态拓扑基础环境模板：2 颗遥感星（sensing）+ 2 颗算力星（compute），呈 2×2 网格跨轨连接。
+# 解析圆轨 + 最大通信距离门限；非完整 Walker 星座、非时变星历（见 ADR 0003）。
 nodes: 4
 topology: orbit_planes
 arrival_window_s: 900.0

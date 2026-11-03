@@ -1,4 +1,4 @@
-"""实时再分配 · 无消耗：换位后启发式迁到更好节点；须配 link_cost=off。"""
+"""无消耗迁移：限功切换后按负载迁到更快的节点；须配 link_cost=off。"""
 from __future__ import annotations
 
 from satsim.method.policies.schedulers._placement import place_by_iter_time
@@ -6,7 +6,7 @@ from satsim.method.policies.schedulers._select import pick_migration
 
 
 class RebalanceFreeScheduler:
-    """无链路代价的运行时重分配（free / no-cost）。"""
+    """不占星间带宽的运行中迁移（free / no-cost）。"""
 
     id = "rebalance_free"
 

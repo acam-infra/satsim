@@ -1,11 +1,11 @@
 schema: satsim.scene/v1
 name: scene_gamma_smoke_v1
 story: |
-  Gamma 间隔到达冒烟（CV 控突发）。cv=1 退化为泊松。
-  换位用 absolute。
+  Gamma 分布间隔到达冒烟测试（用变异系数 CV 控制突发程度，cv=1 时退化为普通泊松到达）。
+  限功切换时刻使用固定绝对时间（absolute）。
 not_modeled:
   - 真实星历
-  - 主 claim 表
+  - 主实验结论表数据
 mirrors:
   cfg:
     nodes: 4

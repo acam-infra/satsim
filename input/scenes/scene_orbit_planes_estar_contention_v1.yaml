@@ -1,14 +1,14 @@
 schema: satsim.scene/v1
 name: scene_orbit_planes_estar_contention_v1
 story: |
-  两壳层 orbit_planes 快照上的跨轨 E★ 加严争用叙事。
-  换位后暗 0+1、亮 2+3；有代价臂 sync_burst 迁向 node2，路径共享 E★=(0,2)。
-  本文件只作叙事镜像；入口是 scripts/exp_orbit_estar_contention.py
-  （配置 configs/exp_orbit_planes_estar_contention_v1.yaml），不走普通 satsim policies 复现。
+  双轨静态拓扑（orbit_planes）上的跨轨瓶颈边 E★ 拥塞实验说明。
+  限功切换后卫星 0 和 1 变暗降频、卫星 2 和 3 保持满血；占带宽迁移策略将请求集中迁往卫星 2，迁移路径全部挤在瓶颈链路 E★=(0,2) 上。
+  本文件仅作场景背景说明；运行入口是 scripts/exp_orbit_estar_contention.py
+  （读取 configs/exp_orbit_planes_estar_contention_v1.yaml），不走常规 satsim 命令行入口。
 not_modeled:
-  - 普通 policies/metadata 驱动的 resolve_spec 入口
-  - 连续星历 / 时变重连
-  - 主论文 C1/C2 表（本文件支撑的是争用加压脚本）
+  - 常规 policies/metadata 驱动的 resolve_spec 入口
+  - 连续星历 / 动态断链重连
+  - 主论文 C1/C2 汇总表（本文件对应独立的瓶颈拥塞实验脚本）
 mirrors:
   cfg:
     nodes: 4

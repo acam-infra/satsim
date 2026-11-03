@@ -1,17 +1,17 @@
 schema: satsim.scene/v1
 name: scene_ring_s1_dynamic_thermal_v1
 story: |
-  与 scene_inferred_orbit_pod_v3 同环、同合成过境负载；热路径改为 thermal.mode=dynamic：
-  忙节点一阶 RC 升温，越过阈值后两档节流（非显式功率帽换位）。
-  t_swap 仍作指标「换位后」窗口锚点；explicit_events 会被写入但 dynamic 后端不读。
-  问：自热 alone 能否拉开首次分配 vs 无消耗再分配（C1），以及有消耗随机是否相对 free 掉回去（C2）。
+  与主实验相同的四星环拓扑和模拟过境请求流；温控模式改为动态温控（thermal.mode=dynamic）：
+  有负载的节点按一阶 RC 模型升温，超过温度阈值后自动降频（而非按预设时间表定时限功）。
+  t_swap 仍作为统计达标有效吞吐（goodput）的起始时间锚点；explicit_events 虽写入配置但 dynamic 模式不会读取。
+  用于检验：单靠负载发热降频能否拉开首次分配与无消耗迁移的差距（结论 C1），以及随机迁移是否因抢带宽而回落（结论 C2）。
 not_modeled:
-  - 真实星历和六根数
-  - 时变 ISL
+  - 真实星历和轨道六根数
+  - 随时间变化的动态星间链路
   - 全星座规模
-  - 完整轨道热平衡/食季（本场景为一阶 RC 示意）
-  - 显式功率帽换位作为热因（改由自热）
-  - STAC L1 的真实到达时刻
+  - 完整轨道热平衡/食季（本场景为一阶 RC 温控模型）
+  - 定时限功切换（本场景改由负载发热触发降频）
+  - STAC L1 的真实到达时间戳
 mirrors:
   cfg:
     nodes: 4

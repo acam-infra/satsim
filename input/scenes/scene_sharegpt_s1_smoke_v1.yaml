@@ -1,12 +1,12 @@
 schema: satsim.scene/v1
 name: scene_sharegpt_s1_smoke_v1
 story: |
-  四节点环；ShareGPT 长度 CSV + 定间隔到达（EcoServe 风格，无时间戳）。
-  CSV 默认 char/4 近似；冒烟用 len_scale=10 加压。long = 缩放后 pin+pout >= 1500。
-  本文件只做冒烟，不支撑论文主表。
+  四星环拓扑；使用 ShareGPT 真实对话长度 CSV + 固定间隔到达（EcoServe 风格，无原始时间戳）。
+  CSV 默认按字符数除以 4 估算 token 数；冒烟测试使用 len_scale=10 放大长度以增加负载压力。缩放后输入+输出 >= 1500 视为长请求。
+  本文件仅作冒烟测试，不产出论文主表数据。
 not_modeled:
-  - 真实 HF tokenizer / EcoServe TTFT-TPOT 客户端 SLO
-  - EcoServe 跨实例编排 / 不迁 KV
+  - 真实 HuggingFace 分词器 / EcoServe 客户端 TTFT-TPOT 延迟约束
+  - EcoServe 跨实例编排 / 不迁移 KV 模式
 mirrors:
   cfg:
     nodes: 4

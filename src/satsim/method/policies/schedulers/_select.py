@@ -1,4 +1,4 @@
-"""再分配候选选择。"""
+"""迁移候选选择。"""
 from __future__ import annotations
 
 from satsim.method.engine.timing import iter_time

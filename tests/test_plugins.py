@@ -69,7 +69,7 @@ def test_placement_rebalance_fields_refused(tmp_path: Path):
         "  place_once:\n    placement: first\n    rebalance: none\n    link_cost: \"off\"\n",
         1,
     )
-    with pytest.raises(SpecError, match="未准入字段|需要 scheduler"):
+    with pytest.raises(SpecError, match="不允许的字段|需要 scheduler"):
         resolve_spec(_detached(text, tmp_path / "legacy.yaml"))
 
 
@@ -79,7 +79,7 @@ def test_scheduler_link_cost_mismatch_refused(tmp_path: Path):
         "  place_once:\n    scheduler: place_once\n    link_cost: \"full\"\n",
         1,
     )
-    with pytest.raises(SpecError, match="link_cost 只准入"):
+    with pytest.raises(SpecError, match="link_cost 只允许"):
         resolve_spec(_detached(text, tmp_path / "bad_lc.yaml"))
 
 

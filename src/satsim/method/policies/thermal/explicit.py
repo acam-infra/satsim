@@ -1,4 +1,4 @@
-"""显式功率帽事件 → DVFS（默认；与历史行为 bit-identical）。"""
+"""定时限功事件 → DVFS（默认；与历史行为逐位一致）。"""
 from __future__ import annotations
 
 from typing import Sequence

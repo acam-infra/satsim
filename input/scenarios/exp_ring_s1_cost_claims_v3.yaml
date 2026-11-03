@@ -1,9 +1,9 @@
-# 论文三档：
-#   1) place_once — 初次分配 only
-#   2) rebalance_free — 实时再分配 · 无消耗
-#   3) rebalance_random / rebalance_ours — 有消耗再分配（random 基线；ours=TODO）
-# C1: place_once vs rebalance_free
-# C2: rebalance_free vs rebalance_random（*_nobg 对照）
+# 论文三档调度策略：
+#   1) place_once — 首次分配（不迁移）
+#   2) rebalance_free — 无消耗迁移（不占星间带宽）
+#   3) rebalance_random / rebalance_ours — 占带宽迁移（随机迁移基线；自研策略 ours=TODO）
+# 结论 C1: place_once vs rebalance_free
+# 结论 C2: rebalance_free vs rebalance_random（含 *_nobg 无背景流对照）
 name: exp_ring_s1_cost_claims_v3
 base: base_ring_s1.yaml
 trace:

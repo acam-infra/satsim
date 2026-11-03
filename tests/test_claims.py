@@ -12,7 +12,7 @@ SCENE = ROOT / "input" / "scenes" / "scene_inferred_orbit_pod_v3.yaml"
 
 
 def test_scene_is_not_a_run():
-    with pytest.raises(SpecError, match="叙事"):
+    with pytest.raises(SpecError, match="场景背景说明"):
         resolve_spec(SCENE)
 
 
@@ -35,7 +35,7 @@ def test_policy_missing_scheduler_refused(tmp_path: Path):
         "  invented:\n    hysteresis: 0.15\n  place_once:\n",
         1,
     )
-    with pytest.raises(SpecError, match="scheduler|未准入字段"):
+    with pytest.raises(SpecError, match="scheduler|不允许的字段"):
         resolve_spec(_detached(text, tmp_path / "bad.yaml"))
 
 
@@ -45,7 +45,7 @@ def test_unknown_override_is_refused(tmp_path: Path):
         "  gpu.kv_gib: 24.0\n  thermal.T_max: 1\n",
         1,
     )
-    with pytest.raises(SpecError, match="未准入的覆盖项"):
+    with pytest.raises(SpecError, match="不允许的覆盖项"):
         resolve_spec(_detached(text, tmp_path / "bad.yaml"))
 
 
@@ -59,6 +59,6 @@ def test_benefit_and_link_cost():
     assert c2["max_flows_on_link"] > 1
     assert c2["goodput_drop"] > 0.05
     assert c2["rebalance_link_abort_mean"] > 0
-    # 无背景时随机有消耗仍可能慢于 free，但 abort/争用应缓解
+    # 无背景时随机占带宽迁移仍可能慢于 free，但超时中断应减少
     assert c2["nobg"]["rebalance_link_abort_mean"] < c2["rebalance_link_abort_mean"]
     assert payload["claims"]["ours"]["status"] == "todo"

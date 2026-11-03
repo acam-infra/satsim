@@ -66,7 +66,7 @@ def run_one(cfg: dict, policy: dict, seed: int, trace: dict, t_swap_s: float, sl
     for req in reqs:
         req.proc = env.process(decode_proc(env, world, req))
     arrival_window = float(cfg["arrival_window_s"])
-    horizon = arrival_window + float(cfg["drain_s"])  # 仿真使役时间 = 到达窗 + drain
+    horizon = arrival_window + float(cfg["drain_s"])  # 仿真总时长 = 请求到达期 + 尾流排空期
     env.run(until=horizon)
     good_long = n_long = completed_long = n_completed = 0
     tok_slo_out = 0

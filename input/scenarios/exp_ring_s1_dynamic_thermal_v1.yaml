@@ -1,6 +1,6 @@
-# 自热（thermal.mode=dynamic）下三档：能否造出 C1/C2 量级趋势？
-# 工作负载对齐 exp_ring_s1_cost_claims_v3；功率帽时间线仍由 t_swap 写入但 dynamic 后端忽略。
-# t_swap 仅作 goodput「换位后」窗口锚点（与显式基线同口径）。
+# 动态温控模式（thermal.mode=dynamic）下的三档调度对比：检验能否复现 C1/C2 趋势。
+# 请求负载与 exp_ring_s1_cost_claims_v3 一致；定时限功时间表仍由 t_swap 生成但 dynamic 模式会忽略。
+# t_swap 仅作为统计达标有效吞吐（goodput）的起始时间锚点（与定时限功基线保持同口径）。
 name: exp_ring_s1_dynamic_thermal_v1
 base: base_ring_s1_dynamic.yaml
 trace:

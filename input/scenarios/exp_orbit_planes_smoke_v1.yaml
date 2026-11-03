@@ -1,4 +1,4 @@
-# 轨道连边快照冒烟（sensing + compute 两壳层）
+# 双轨静态拓扑（orbit_planes）冒烟测试（遥感星 sensing + 算力星 compute 双轨道面）
 name: exp_orbit_planes_smoke_v1
 base: base_orbit_planes_s1.yaml
 trace:

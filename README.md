@@ -1,99 +1,97 @@
 # satsim
 
-四节点环上的轨面舱段迁移仿真（SimPy）。论文三档调度：**首次分配**｜**无消耗再分配**｜**有消耗再分配**（random 基线 + ours TODO）。
+低轨卫星组的在线推理与跨星迁移仿真器（基于 SimPy）。对比论文三档调度策略：
+**首次分配（`place_once`）**｜**无消耗迁移（`rebalance_free`）**｜**占带宽迁移（随机基线 `rebalance_random` + 自研策略 `rebalance_ours` 待实现）**。
 
 ```bash
 uv sync
-.venv/bin/satsim configs/exp_ring_s1_cost_claims_v3.yaml
-.venv/bin/satsim configs/exp_poisson_smoke_v1.yaml   # 泊松冒烟
-.venv/bin/satsim configs/exp_gamma_smoke_v1.yaml     # Gamma 到达冒烟（cv 控突发）
-.venv/bin/satsim configs/exp_orbit_planes_smoke_v1.yaml  # 轨道连边快照冒烟
-.venv/bin/satsim configs/exp_orbit_planes_s1_cost_claims_v1.yaml  # 轨道拓扑三档 e2e
-.venv/bin/satsim configs/exp_sharegpt_s1_smoke_v1.yaml  # ShareGPT 长度 + 定间隔冒烟
-.venv/bin/python scripts/plot_gamma_cv_latency.py  # CV∈{1,2,4,8} latency CDF / p99
+.venv/bin/satsim configs/exp_ring_s1_cost_claims_v3.yaml          # 主实验：四星环拓扑三档对比
+.venv/bin/satsim configs/exp_poisson_smoke_v1.yaml                # 泊松到达冒烟测试
+.venv/bin/satsim configs/exp_gamma_smoke_v1.yaml                  # Gamma 突发到达冒烟测试（cv 控制突发度）
+.venv/bin/satsim configs/exp_orbit_planes_smoke_v1.yaml           # 静态轨道拓扑冒烟测试
+.venv/bin/satsim configs/exp_orbit_planes_s1_cost_claims_v1.yaml  # 静态轨道拓扑三档完整对比
+.venv/bin/satsim configs/exp_sharegpt_s1_smoke_v1.yaml            # ShareGPT 真实请求长度冒烟测试
+.venv/bin/python scripts/plot_gamma_cv_latency.py                 # 绘制 CV∈{1,2,4,8} 延迟分布图
 .venv/bin/pytest
 ```
 
-## 命名（base / exp / scene）
+## 配置文件命名（`base` / `exp` / `scene`）
 
 | 前缀 | 目录 | 作用 |
 |------|------|------|
-| `base_*` | `input/scenarios/` | 世界底稿（拓扑、GPU、热、网）；**不能**当 CLI 入口 |
-| `exp_*` | `input/scenarios/` + `configs/` symlink | 可跑实验（trace / policies / seeds）；CLI 用 `configs/exp_*.yaml` |
-| `scene_*` | `input/scenes/` | 叙事镜像（`satsim.scene/v1`）；**不能**当入口跑 |
+| `base_*` | `input/scenarios/` | **基础环境模板**（拓扑、GPU、温控、网络硬件参数）；不能直接作为命令行入口运行 |
+| `exp_*` | `input/scenarios/` + `configs/` 软链 | **可运行实验**（定义请求流、对比策略、随机种子）；命令行直接跑 `configs/exp_*.yaml` |
+| `scene_*` | `input/scenes/` | **场景背景说明**（解释实验对应的物理背景与简化假设）；仅供对照阅读，不能直接运行 |
 
-文件名 stem 与 YAML 顶层 `name:` 一致。`exp_*` 里的 `base:` / `metadata.scene:` 分别指向 `base_*.yaml` 与 `../scenes/scene_*.yaml`。
+文件名（去掉 `.yaml`）与文件内的顶层 `name:` 保持一致。`exp_*` 中的 `base:` 引用基础环境模板，`metadata.scene:` 引用对应的场景背景说明。
 
-## 主结果（环 `exp_ring_s1_cost_claims_v3`，多种子均值）
+## 核心结论（Claims）
 
-表格式约束见 `AGENTS.md`（基线 place_once，% 写在数值旁）。
+实验围绕两个核心结论展开（只统计限功切换之后每个生成 token 的耗时 TPOT 是否达标）：
 
-基线 **place_once**；括号内为相对基线；**粗体**为该列最优。
+- **结论 C1（重调度收益）**：卫星发生限功切换（亮星变暗、算力降频）后，**首次分配**把请求死锁在变慢的卫星上，吞吐大跌；**无消耗迁移**能把请求及时挪到算力充足的卫星，显著提升达标吞吐。
+- **结论 C2（带宽争用代价）**：一旦迁移需要走星间链路传输状态（**占带宽迁移**），多条迁移流与背景流争抢有限带宽，**随机迁移**会因为传输变慢和超时中断，把免费迁移赚来的性能收益吐回去。
 
-| 臂 | good_long ↑ | goodput ↑ | link_GB ↓ | abort ↓ |
+## 主实验结果：四星环拓扑（`exp_ring_s1_cost_claims_v3`，多种子均值）
+
+以 **首次分配（`place_once`）** 为基线；括号内为相对基线的变化比例；**粗体**为该列最优。
+
+| 调度策略 | 达标长请求数 (`good_long`) ↑ | 有效吞吐 (`goodput` tok/s) ↑ | 迁移流量 (`link_GB`) ↓ | 迁移超时中断 (`abort`) ↓ |
 |---|---|---|---|---|
-| place_once | 12.8 | 242.8 | 0 | 0 |
-| **free** | **19.2 (+50%)** | **356.6 (+46.9%)** | **0** | **0** |
-| random | 14.4 (+12.5%) | 271.3 (+11.7%) | 37.8 | 9.2 |
-| ours (TODO) | 12.8 (0%) | 242.8 (0%) | 0 | 0 |
+| 首次分配 (`place_once`) | 12.8 | 242.8 | 0 | 0 |
+| **无消耗迁移 (`free`)** | **19.2 (+50%)** | **356.6 (+46.9%)** | **0** | **0** |
+| 随机迁移 (`random`) | 14.4 (+12.5%) | 271.3 (+11.7%) | 37.8 | 9.2 |
+| 自研迁移 (`ours`, TODO) | 12.8 (0%) | 242.8 (0%) | 0 | 0 |
 
-- **C1**：free 相对首次明显更好（goodput **+46.9%**）。
-- **C2**：random 相对 free 掉回（271 vs 357，约 **−23.9%**），abort≈9.2。
-- **ours**：占位，同首次；待实现。
+- **结论 C1**：无消耗迁移相比首次分配显著更好（有效吞吐 **+46.9%**）。
+- **结论 C2**：随机迁移因为占带宽和抢链路，有效吞吐从无消耗迁移的 356.6 掉回 271.3（回落约 **−23.9%**），平均每次实验发生 9.2 次迁移超时中断。
+- **自研策略 (`ours`)**：目前仅作空操作占位，表现与首次分配一致，待填入算法。
 
-## 轨道连边快照（`exp_orbit_planes_s1_cost_claims_v1`）
+## 双轨四星拓扑结果（`exp_orbit_planes_s1_cost_claims_v1`）
 
-`topology: orbit_planes`，sensing×2 + compute×2 类 grid；seeds 1–5；基线同样是 **place_once**。
+使用 `topology: orbit_planes`（2 颗遥感星 + 2 颗算力星组成跨轨网格），随机种子 1–5 均值；基线同样为 **首次分配（`place_once`）**。
 
-| 臂 | good_long ↑ | goodput ↑ | link_GB ↓ | abort ↓ |
+| 调度策略 | 达标长请求数 (`good_long`) ↑ | 有效吞吐 (`goodput` tok/s) ↑ | 迁移流量 (`link_GB`) ↓ | 迁移超时中断 (`abort`) ↓ |
 |---|---|---|---|---|
-| place_once | 12.8 | 242.8 | 0 | 0 |
-| **free** | **19.2 (+50%)** | **356.6 (+46.9%)** | **0** | **0** |
-| random | 14.0 (+9.4%) | 264.2 (+8.8%) | 31.6 | 0 |
-| random_nobg | 15.0 (+17%) | 282.0 (+16%) | 30.4 | 0 |
+| 首次分配 (`place_once`) | 12.8 | 242.8 | 0 | 0 |
+| **无消耗迁移 (`free`)** | **19.2 (+50%)** | **356.6 (+46.9%)** | **0** | **0** |
+| 随机迁移 (`random`) | 14.0 (+9.4%) | 264.2 (+8.8%) | 31.6 | 0 |
+| 随机迁移·无背景流 (`random_nobg`) | 15.0 (+17%) | 282.0 (+16%) | 30.4 | 0 |
 
-- 跨轨 grid 上 C1 与环同量级；random 只小幅好于首次，相对 free 约 **−25.9%**（nobg 仍约 **−20.9%**）——链路迁移本身在拖，abort 尚未逼出。
-- 跑：`.venv/bin/satsim configs/exp_orbit_planes_s1_cost_claims_v1.yaml`；ADR：`docs/adr/0003-orbit-planes-topology-snapshot.md`。
+- 在跨轨网格拓扑上，结论 C1 的提升幅度与环拓扑一致；随机迁移仅比首次分配略好，相比无消耗迁移回落约 **−25.9%**（即使关掉背景流 `random_nobg` 仍回落 **−20.9%**）——说明跨星传输本身的耗时就已经在拖累性能。
+- 运行命令：`.venv/bin/satsim configs/exp_orbit_planes_s1_cost_claims_v1.yaml`；设计背景见 `docs/adr/0003-orbit-planes-topology-snapshot.md`。
 
+## 动态温控模式试跑（`exp_ring_s1_dynamic_thermal_v1`）
 
-## 自热 dynamic 试跑（`exp_ring_s1_dynamic_thermal_v1`）
+开启 `thermal.mode=dynamic`（卫星随负载发热自动降频），复用主实验负载。**目前单靠发热降频还跑不出结论 C1 的明显差距**：种子 1–3 下，达标长请求数分别为首次分配 12.0、无消耗迁移 8.67（−28%）、随机迁移 3.0；这是因为四颗星在高负载下几乎同时过热降频，场上没有“凉快且算力满血”的目标星可供迁入。详细原因与改进方向见 `docs/notes/dynamic_thermal_cost_claims.md`。
 
-`thermal.mode=dynamic` 对齐 s1 负载；**尚未**造出 C1（free ≫ place_once）。seeds 1–3：good_long 首次 12.0 / free 8.67（−28%）/ random 3.0；req/s·tok/s 全臂持平；四节点均进节流。细节与下一旋钮：`docs/notes/dynamic_thermal_cost_claims.md`。
+## 跨轨瓶颈链路（E★）拥塞实验（`exp_orbit_planes_estar_contention_v1`）
 
-## 跨轨 E★ 加严争用（`exp_orbit_planes_estar_contention_v1`）
+场景设置：限功切换后，卫星 0 和 1 变暗降频，卫星 2 和 3 保持满血；占带宽迁移策略将大批请求集中迁往卫星 2，所有迁移流都挤在同一条跨轨瓶颈链路 E★=`(0,2)` 上。将链路带宽收紧到 `link_gbps=0.5`、超时设为 30s、关闭背景流，且每个请求最多尝试迁移一次。
 
-构造：换位后暗 0+1、亮 2+3；有代价臂 **sync_burst 迁向 node2**，路径共享 E★=`(0,2)`。主轴 `link_gbps=0.5`，辅 timeout=30 / control=0.25 / 高并发；bg=0。每请求只尝试一次（避免 abort 重试刷爆）。
-
-| 臂 | good_long ↑ | goodput ↑ | link_GB ↓ | abort ↓ | E★峰值流 |
+| 调度策略 | 达标长请求数 (`good_long`) ↑ | 有效吞吐 (`goodput` tok/s) ↑ | 迁移流量 (`link_GB`) ↓ | 迁移超时中断 (`abort`) ↓ | 瓶颈边峰值并发流 |
 |---|---|---|---|---|---|
-| 首次分配 | 6.4 | 129.1 | 0.0 | 0.0 | 0.0 |
-| **无消耗再分配** | **19.2 (+200%)** | **356.6 (+176%)** | **0.0** | **0.0** | **0.0** |
-| 有消耗·E★汇聚 | 6.4 (+0%) | 129.1 (+0%) | 2.8 | 12.8 | 12.8 |
+| 首次分配 (`place_once`) | 6.4 | 129.1 | 0.0 | 0.0 | 0.0 |
+| **无消耗迁移 (`free`)** | **19.2 (+200%)** | **356.6 (+176%)** | **0.0** | **0.0** | **0.0** |
+| 占带宽迁移·瓶颈汇聚 | 6.4 (+0%) | 129.1 (+0%) | 2.8 | 12.8 | 12.8 |
 
-- 无消耗仍大好；有代价在 E★ 上互抢后 **全部超时 abort（mig=0）**，成绩被压回与首次持平，相对 free 约 **−66.7%** good_long。
-- 跑：`.venv/bin/python scripts/exp_orbit_estar_contention.py`（配置 `configs/exp_orbit_planes_estar_contention_v1.yaml`；叙事见 `input/scenes/scene_orbit_planes_estar_contention_v1.yaml`）。
+- 无消耗迁移依然收益巨大；而占带宽迁移在瓶颈链路 E★ 上扎堆抢带宽，导致 **所有迁移全部超时中断（成功迁出数为 0）**，性能直接跌回与首次分配完全相同（相比无消耗迁移损失 **−66.7%** 的达标长请求）。
+- 运行命令：`.venv/bin/python scripts/exp_orbit_estar_contention.py`（配置文件 `configs/exp_orbit_planes_estar_contention_v1.yaml`；场景说明见 `input/scenes/scene_orbit_planes_estar_contention_v1.yaml`）。
 
-## 吞吐定义
+## 吞吐指标口径
 
-分母 **horizon** = `arrival_window_s + drain_s`（仿真使役时间）。完成 = 有 `t_done`。
+总统计时长 **仿真总时长 (`horizon`)** = 请求到达期 `arrival_window_s` + 尾流排空期 `drain_s`。请求有完成时间戳 `t_done` 即视为已完成。
 
-- **Request Throughput** `request_throughput_rps` = 完成请求数 / horizon（req/s）
-- **Total Token Throughput** `total_token_throughput_tok_s` = 完成请求的 (prompt+output) token 之和 / horizon
-- 旧 `goodput_tok_s`：换位后 TPOT 过 SLO 的 *输出* token / `arrival_window_s`（C1/C2 仍用它）
+- **请求吞吐率 (`request_throughput_rps`)** = 已完成请求数 / `horizon`（单位：req/s）
+- **总 Token 吞吐率 (`total_token_throughput_tok_s`)** = 已完成请求的（输入 prompt + 输出 output）token 总数 / `horizon`（单位：tok/s）
+- **达标有效吞吐 (`goodput_tok_s`)** = 限功切换之后、生成速度（TPOT）满足延迟要求的输出 token 总数 / `arrival_window_s`（结论 C1/C2 主表使用的核心指标）
 
-## Claims（口径）
+## 文档导航
 
-- **C1**：首次分配解决不了功率帽换位；无消耗再分配才把请求放到仍有功率的节点。
-- **C2**：有消耗再分配走链路，与背景流争带宽时随机基线收益掉回去。
+1. 术语对照表：`GLOSSARY.md`
+2. 为什么定这三档调度策略：`docs/adr/0002-three-tier-schedulers.md`
+3. 静态轨道拓扑说明：`docs/adr/0003-orbit-planes-topology-snapshot.md`
+4. 策略与温控插件规格：`docs/SPEC_PLUGIN_FRAMEWORK.md`
+5. 可运行实验入口说明：`configs/README.md`
 
-达标只看换位后的 TPOT。场景镜像见 `input/scenes/scene_*.yaml`（不能当入口跑）。
-
-## 阅读路径
-
-1. 术语：`GLOSSARY.md`
-2. 三档决策：`docs/adr/0002-three-tier-schedulers.md`
-3. 轨道连边快照：`docs/adr/0003-orbit-planes-topology-snapshot.md`
-4. 插件规格：`docs/SPEC_PLUGIN_FRAMEWORK.md`
-5. YAML：`scheduler` + `link_cost`（见 `configs/`）
-
-输入在 `input/`（CLI 入口 `configs/exp_*.yaml` symlink）；方法在 `src/satsim/method/`（全局 Scheduler）；输出在 `src/satsim/output/`。
+代码目录：输入与场景生成在 `input/`（命令行入口在 `configs/exp_*.yaml`）；仿真引擎与调度策略在 `src/satsim/method/`；指标汇总与结论检验在 `src/satsim/output/`。

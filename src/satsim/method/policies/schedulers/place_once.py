@@ -1,4 +1,4 @@
-"""只做初次分配，换位后不再分配。"""
+"""只做首次分配，限功切换后不再迁移。"""
 from __future__ import annotations
 
 from satsim.method.policies.schedulers._placement import place_by_iter_time

@@ -32,7 +32,7 @@ def resolve_t_swap_s(spec: dict, cfg: dict) -> tuple[float, float, int]:
     anchor = anchors[0][0]
     if anchor_kind == "max_cluster":
         if any(abs(a - anchor) > 1e-6 for a, _ in anchors):
-            raise SpecError("各种子的 max_cluster 锚点不一致，拒绝把换位时间做成隐蔽旋钮")
+            raise SpecError("各种子的 max_cluster 锚点不一致，拒绝把限功切换时刻做成隐藏参数")
     t_swap_s = anchor + float(t_swap["offset_s"])
     return t_swap_s, float(anchor), int(anchors[0][1])
 
@@ -79,7 +79,7 @@ def _fmt(v) -> str:
 
 
 def main(argv: list[str] | None = None) -> None:
-    ap = argparse.ArgumentParser(description="跑一份已准入的 satsim spec")
+    ap = argparse.ArgumentParser(description="跑一份已通过校验的 satsim 实验配置")
     ap.add_argument("spec")
     ap.add_argument("--out", default="", help="默认写入 ./runs/<name>")
     args = ap.parse_args(argv)

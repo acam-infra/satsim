@@ -2,7 +2,7 @@
 # 说明：
 #   - 长度 CSV 由 scripts/prep_sharegpt_lengths.py 导出（默认 char/4；无 HF tokenizer）
 #   - len_scale=10：把近似长度拉到更接近本仓 synthetic pad 的压力量级，否则 C1≈0
-#   - 到达压进 40s 窗 + tpot_slo=0.02，才能在换位功率帽下分出三臂
+#   - 请求集中到达 40s 窗口 + 严格延迟要求 tpot_slo=0.02，以在限功切换后拉开三档调度策略的差距
 name: exp_sharegpt_s1_smoke_v1
 base: base_ring_s1.yaml
 trace:

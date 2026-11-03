@@ -27,7 +27,7 @@ def row_from_run(
 
     - request_throughput_rps: 完成请求数 / horizon_s
     - total_token_throughput_tok_s: 完成请求 (prompt+output) token 之和 / horizon_s
-    - goodput_tok_s: 旧对照——换位后 TPOT 过 SLO 的 *输出* token / arrival_window_s
+    - goodput_tok_s: 限功切换后、每 token 生成耗时（TPOT）达标的输出 token / arrival_window_s
     """
     return dict(
         status="ok",

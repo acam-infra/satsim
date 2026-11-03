@@ -1,4 +1,4 @@
-"""准入表与校验：旋钮、显式策略、base/trace/t_swap。"""
+"""配置白名单与校验：可调参数、调度策略、base/trace/t_swap。"""
 from __future__ import annotations
 
 from typing import Any
@@ -7,12 +7,12 @@ from typing import Any
 OVERRIDE_REASONS = {
     "arrival_window_s": "goodput 的分母，spec 必须能对准到达窗。",
     "background.gbps_per_node": "连续背景流量；对照实验可写成 0。",
-    "background.strict_priority": "背景是否先占链路；本复刻只准入 true。",
+    "background.strict_priority": "背景是否先占链路；本复刻只允许 true。",
     "net.link_gbps": "抽象 ISL 口径。",
     "gpu.kv_gib": "单节点 KV 容量，放不下就不往该节点放。",
     "cost.mode": "由 link_cost 推导：off→free，full→full，net→net。",
     "cost.timeout_s": "剩余带宽上搬不完就 abort 的时限。",
-    "thermal.explicit_events": "换位写成的功率帽时间线，由 t_swap 填，不手写第二套。",
+    "thermal.explicit_events": "限功切换的功耗时间表，由 t_swap 写入，不要再手写一份。",
 }
 
 LINK_COST_TO_MODE = {"off": "free", "full": "full", "net": "net"}
@@ -22,7 +22,7 @@ LINK_COST_IDS = {"off", "full", "net"}
 THERMAL_MODES = {"explicit", "dynamic"}
 KNOB_KEYS = {"background.gbps_per_node"}
 
-# 论文三档：初次 / 无消耗再分配 / 有消耗再分配（random|ours）
+# 论文三档：首次分配 / 无消耗迁移 / 占带宽迁移（random|ours）
 SCHEDULER_LINK_COST = {
     "place_once": {"off"},
     "rebalance_free": {"off"},
@@ -72,7 +72,7 @@ def getp(d: dict, path: str) -> Any:
 
 def setp(d: dict, path: str, value: Any) -> None:
     if path not in OVERRIDE_REASONS:
-        raise SpecError(f"未准入的覆盖项 {path}")
+        raise SpecError(f"不允许的覆盖项 {path}")
     cur = d
     keys = path.split(".")
     for k in keys[:-1]:
@@ -86,7 +86,7 @@ def setp(d: dict, path: str, value: Any) -> None:
 def _expect_keys(obj: dict, allowed: set[str], where: str) -> None:
     extra = set(obj) - allowed
     if extra:
-        raise SpecError(f"{where} 有未准入字段 {sorted(extra)}")
+        raise SpecError(f"{where} 含不允许的字段 {sorted(extra)}")
 
 
 def _validate_orbit_block(orbit: dict, n: int) -> None:
@@ -132,7 +132,7 @@ def _validate_orbit_block(orbit: dict, n: int) -> None:
             f"orbit.planes[{i}]",
         )
         if plane.get("role") not in ("sensing", "compute"):
-            raise SpecError(f"orbit.planes[{i}].role 只准入 sensing|compute")
+            raise SpecError(f"orbit.planes[{i}].role 只允许 sensing|compute")
         if float(plane["altitude_km"]) <= 0:
             raise SpecError(f"orbit.planes[{i}].altitude_km 必须为正")
         nodes = plane.get("nodes")
@@ -170,7 +170,7 @@ def _validate_thermal(th: dict) -> None:
         raise SpecError("thermal 必须是映射")
     mode = th.get("mode", "explicit")
     if mode not in THERMAL_MODES:
-        raise SpecError(f"thermal.mode 只准入 {' | '.join(sorted(THERMAL_MODES))}，收到 {mode!r}")
+        raise SpecError(f"thermal.mode 只允许 {' | '.join(sorted(THERMAL_MODES))}，收到 {mode!r}")
     common = {"P_idle", "P_max", "gamma", "f_min", "mode", "explicit_events"}
     if mode == "explicit":
         _expect_keys(th, common, "thermal")
@@ -242,18 +242,18 @@ def validate_base(cfg: dict) -> None:
         raise SpecError("drain_s 和 control_period_s 必须为正")
     topo = cfg["topology"]
     if topo not in ("ring", "orbit_planes"):
-        raise SpecError("topology 只准入 ring | orbit_planes")
+        raise SpecError("topology 只允许 ring | orbit_planes")
     if not isinstance(cfg["nodes"], int):
         raise SpecError("nodes 必须是整数")
     n = cfg["nodes"]
     if topo == "ring":
         if not 2 <= n <= 8:
-            raise SpecError("ring 的 nodes 只准入 2..8")
+            raise SpecError("ring 的 nodes 只允许 2..8")
         if "orbit" in cfg:
             raise SpecError("topology=ring 时不准写 orbit")
     else:
         if not 2 <= n <= 16:
-            raise SpecError("orbit_planes 的 nodes 只准入 2..16（见 ADR 0003）")
+            raise SpecError("orbit_planes 的 nodes 只允许 2..16（见 ADR 0003）")
         if "orbit" not in cfg:
             raise SpecError("topology=orbit_planes 需要 orbit 块")
         _validate_orbit_block(cfg["orbit"], n)
@@ -278,10 +278,10 @@ def validate_base(cfg: dict) -> None:
         "background",
     )
     if cfg["background"]["strict_priority"] is not True:
-        raise SpecError("background.strict_priority 只准入 true")
+        raise SpecError("background.strict_priority 只允许 true")
     _expect_keys(cfg["cost"], {"mode", "timeout_s", "switch_s"}, "cost")
     if cfg["cost"]["mode"] not in ("free", "full", "net"):
-        raise SpecError("cost.mode 只准入 free/full/net")
+        raise SpecError("cost.mode 只允许 free/full/net")
     _expect_keys(cfg["workload"], {"p_long"}, "workload")
     n = cfg["nodes"]
     for pair in cfg["background"]["pairs"]:
@@ -297,7 +297,7 @@ def validate_base(cfg: dict) -> None:
 def _validate_token_pad(pad: dict) -> None:
     _expect_keys(pad, {"mode", "long_out", "long_pin", "short_out", "short_pin"}, "token_pad")
     if pad["mode"] != "floor":
-        raise SpecError("token_pad.mode 只准入 floor")
+        raise SpecError("token_pad.mode 只允许 floor")
 
 
 def validate_trace(trace: dict) -> None:
@@ -418,7 +418,7 @@ def validate_trace(trace: dict) -> None:
             raise SpecError("sharegpt 需要 window_s > 0 且 rate_per_s > 0")
         arrival = str(trace["arrival"])
         if arrival not in {"deterministic", "poisson", "gamma"}:
-            raise SpecError("sharegpt.arrival 只准入 deterministic / poisson / gamma")
+            raise SpecError("sharegpt.arrival 只允许 deterministic / poisson / gamma")
         if arrival == "gamma" and float(trace["cv"]) <= 0:
             raise SpecError("sharegpt gamma 需要 cv > 0")
         for key in ("num_prompts", "n", "target_n"):
@@ -429,7 +429,7 @@ def validate_trace(trace: dict) -> None:
         if int(trace["max_seqlen"]) < 8:
             raise SpecError("max_seqlen 过小")
         return
-    raise SpecError("trace.kind 只准入 synthetic_pass / poisson / gamma / sharegpt")
+    raise SpecError("trace.kind 只允许 synthetic_pass / poisson / gamma / sharegpt")
 
 
 def _coerce_id(value: Any) -> str:
@@ -456,13 +456,13 @@ def validate_policy(name: str, pol: dict) -> None:
     pol["link_cost"] = _coerce_id(pol["link_cost"])
 
     if pol["scheduler"] not in SCHEDULER_IDS:
-        raise SpecError(f"{name}: scheduler 只准入 {sorted(SCHEDULER_IDS)}")
+        raise SpecError(f"{name}: scheduler 只允许 {sorted(SCHEDULER_IDS)}")
     if pol["link_cost"] not in LINK_COST_IDS:
-        raise SpecError(f"{name}: link_cost 只准入 {sorted(LINK_COST_IDS)}")
+        raise SpecError(f"{name}: link_cost 只允许 {sorted(LINK_COST_IDS)}")
     allowed_lc = SCHEDULER_LINK_COST[pol["scheduler"]]
     if pol["link_cost"] not in allowed_lc:
         raise SpecError(
-            f"{name}: scheduler={pol['scheduler']} 时 link_cost 只准入 {sorted(allowed_lc)}"
+            f"{name}: scheduler={pol['scheduler']} 时 link_cost 只允许 {sorted(allowed_lc)}"
         )
 
     if pol["scheduler"] in SCHEDULER_NEEDS_HYSTERESIS:
@@ -477,7 +477,7 @@ def validate_policy(name: str, pol: dict) -> None:
         raise SpecError(f"{name}: knobs 必须是映射")
     extra = set(knobs) - KNOB_KEYS
     if extra:
-        raise SpecError(f"{name}: knobs 只准入 {sorted(KNOB_KEYS)}，多了 {sorted(extra)}")
+        raise SpecError(f"{name}: knobs 只允许 {sorted(KNOB_KEYS)}，多了 {sorted(extra)}")
 
     applied = dict(knobs)
     # link_cost → cfg cost.mode（off→free）
@@ -496,4 +496,4 @@ def validate_t_swap(t_swap: dict, *, trace_kind: str | None = None) -> None:
     elif anchor == "first_seed":
         _expect_keys(t_swap, {"anchor", "offset_s", "P_cap"}, "t_swap")
     else:
-        raise SpecError("t_swap.anchor 只准入 max_cluster / absolute / first_seed")
+        raise SpecError("t_swap.anchor 只允许 max_cluster / absolute / first_seed")

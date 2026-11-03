@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""orbit_planes 跨轨 E★ 加严争用：有代价臂被共享瓶颈压下去。
+"""orbit_planes 跨轨瓶颈边 E★ 拥塞：占带宽迁移被共享瓶颈压下去。
 
 构造：
-1. 2×2 grid，E★=(0,2)。
-2. 默认换位 2→0；再额外压暗 node1 → 0/1 都要疏散；place_once 仍可靠 2/3 存活。
-3. 有代价臂目标收束到亮算力星 2，控制拍内 sync_burst 填满并发。
-4. 主轴 link_gbps=0.5；辅 timeout=30、control=0.25、高 caps；bg=0。
+1. 2×2 网格，瓶颈边 E★=(0,2)。
+2. 默认定时限功从 node 2 切到 node 0；再额外限制 node 1，使 0 和 1 都要迁出；首次分配仍可留在满血的 2 和 3。
+3. 占带宽迁移的目标收束到满血算力星 2，每个控制周期用 sync_burst 填满并发。
+4. 主变量 link_gbps=0.5；timeout=30、control=0.25、较高并发上限；背景流为 0。
 """
 from __future__ import annotations
 
@@ -112,7 +112,7 @@ def _set_caps(inflight: int, out: int) -> None:
 
 def _apply_thermal(cfg: dict, t_swap_s: float, p_cap: float, extra_dark: list[int]) -> None:
     apply_t_swap(cfg, t_swap_s, p_cap)
-    # apply_t_swap: [[2,0,t,cap],[0,t,inf,cap]]；追加换位后额外暗星
+    # apply_t_swap: [[2,0,t,cap],[0,t,inf,cap]]；限功切换后再追加被限制的卫星
     events = list(cfg["thermal"]["explicit_events"])
     for j in extra_dark:
         j = int(j)
@@ -350,14 +350,14 @@ def main() -> None:
     base_gp = summary["place_once"]["goodput"]["mean"]
     order = [
         ("place_once", "首次分配"),
-        ("rebalance_free", "无消耗再分配"),
-        ("rebalance_random", "有消耗·E★汇聚"),
+        ("rebalance_free", "无消耗迁移"),
+        ("rebalance_random", "占带宽迁移·瓶颈汇聚"),
     ]
     best_gl = max(order, key=lambda x: summary[x[0]]["good_long"]["mean"])[0]
     best_gp = max(order, key=lambda x: summary[x[0]]["goodput"]["mean"])[0]
 
     lines = [
-        "| 臂 | good_long ↑ | goodput ↑ | link_GB ↓ | abort ↓ | E★峰值流 |",
+        "| 调度策略 | good_long ↑ | goodput ↑ | link_GB ↓ | abort ↓ | E★峰值流 |",
         "|---|---|---|---|---|---|",
     ]
     for arm, label in order:
@@ -378,7 +378,7 @@ def main() -> None:
         knobs=kn,
         estar=list(ESTAR),
         note=(
-            "换位后暗 0+1、亮 2+3；有代价臂 sync_burst 迁向 node2，共享 E★=(0,2)。"
+            "限功切换后 0 和 1 降频、2 和 3 满血；占带宽迁移用 sync_burst 迁向 node2，共享瓶颈边 E★=(0,2)。"
             "主轴 link_gbps；timeout/control/caps 为派生；bg=0。"
         ),
         table_md=table,

@@ -27,10 +27,10 @@ def load_yaml(path: Path) -> dict:
 
 
 def apply_t_swap(cfg: dict, t_swap_s: float, p_cap: float) -> None:
-    """功率帽时间线：换位前压 node 2，换位后压 node 0。"""
+    """定时限功时间表：切换前限制 node 2，切换后限制 node 0。"""
     n = cfg["nodes"]
     if n < 3:
-        raise SpecError("换位写的是 node 2 → node 0，nodes 至少为 3")
+        raise SpecError("限功切换写的是 node 2 → node 0，nodes 至少为 3")
     cfg["thermal"]["explicit_events"] = [
         [2, 0.0, float(t_swap_s), float(p_cap)],
         [0, float(t_swap_s), 1.0e9, float(p_cap)],
@@ -41,7 +41,7 @@ def resolve_spec(spec_path: Path) -> tuple[dict, dict, list[tuple[str, dict, dic
     spec_path = spec_path.resolve()
     spec = load_yaml(spec_path)
     if spec.get("schema") == "satsim.scene/v1":
-        raise SpecError("scene 只是叙事镜像，不能当复现入口。请跑对应的 scenarios spec。")
+        raise SpecError("scene 只是场景背景说明，不能当复现入口。请跑对应的 scenarios spec。")
     _expect_keys(
         spec,
         {
@@ -67,7 +67,7 @@ def resolve_spec(spec_path: Path) -> tuple[dict, dict, list[tuple[str, dict, dic
     for k, v in overrides.items():
         setp(cfg, k, v)
         if k == "background.strict_priority" and v is not True:
-            raise SpecError("background.strict_priority 只准入 true")
+            raise SpecError("background.strict_priority 只允许 true")
     validate_trace(spec["trace"])
     validate_t_swap(spec["t_swap"], trace_kind=str(spec["trace"].get("kind")))
     slo = spec["slo"]
@@ -76,7 +76,7 @@ def resolve_spec(spec_path: Path) -> tuple[dict, dict, list[tuple[str, dict, dic
     if not isinstance(seeds, list) or not seeds or len(seeds) > MAX_SEEDS:
         raise SpecError(f"seeds 需要 1..{MAX_SEEDS} 个")
     if "grid" in spec:
-        raise SpecError("grid 会把一次实验乘开，最小复刻不准入")
+        raise SpecError("grid 会把一次实验展开成多组，当前最小实验不允许")
     policies = spec["policies"]
     if not isinstance(policies, dict) or not policies:
         raise SpecError("policies 为空")
@@ -89,7 +89,7 @@ def resolve_spec(spec_path: Path) -> tuple[dict, dict, list[tuple[str, dict, dic
             for k, v in pol.get("knobs", {}).items():
                 setp(c2, k, v)
                 if k == "background.strict_priority" and v is not True:
-                    raise SpecError("background.strict_priority 只准入 true")
+                    raise SpecError("background.strict_priority 只允许 true")
             jobs.append((name, pol, c2, int(seed)))
     _check_scene(spec_path, spec, cfg)
     return spec, cfg, jobs

@@ -1,15 +1,15 @@
-# Domain docs
+# 领域术语与文档规范（Domain docs）
 
-How to read this repo's domain language.
+阅读或修改本仓库文档前，请先了解以下规范。
 
-## Before exploring, read these
+## 必读入口
 
-- `GLOSSARY.md` at the repo root（论文三档：首次分配 / 无消耗再分配 / 有消耗再分配）.
-- `docs/adr/` for any decision that touches the area you are about to change（含 `0002-three-tier-schedulers.md`、`0004-pluggable-thermal-model.md`）.
+- 根目录 `GLOSSARY.md`：项目统一术语表（如三档调度策略：**首次分配** / **无消耗迁移** / **占带宽迁移**）。
+- `docs/adr/`：核心架构与建模决策记录（含 `0002-three-tier-schedulers.md`、`0004-pluggable-thermal-model.md` 等）。
 
-If a file is missing, proceed. Create a glossary entry or an ADR only when a term or a decision is actually resolved.
+如果某个概念还没有收录，只有在术语含义或设计决策真正敲定时才新增 `GLOSSARY.md` 词条或 ADR。
 
-## Layout
+## 目录结构
 
 ```
 /
@@ -18,15 +18,14 @@ If a file is missing, proceed. Create a glossary entry or an ADR only when a ter
 └── src/
 ```
 
-## Vocabulary
+## 用词原则
 
-Name a claim, a knob, or a migration with the term in `GLOSSARY.md`. When a term you need is missing, either stop inventing a synonym or record the gap as a new glossary entry.
+描述实验结论（Claims）、可调参数（配置项）或跨星迁移时，统一使用 `GLOSSARY.md` 中定义的直白中文名称，必要时在括号内注明代码标识（如 `首次分配 (place_once)`）。当发现缺失某个领域概念时，先补充到 `GLOSSARY.md`，不要临时自造同义词或生硬缩写。
 
-## ADR conflicts
+## ADR 冲突处理
 
-If a change contradicts an ADR, say so in the write-up before overriding it.
+如果新的代码改动推翻了某篇既有 ADR 的决定，修改前请先在说明中明确指出并更新对应 ADR。
 
-## 结果表口径
+## 实验结果表规范
 
-与根目录 `AGENTS.md`「结果表」一节相同：基线 `place_once`，相对百分比写在数值旁，粗体标列最优。新实验表不得改用 free 当基线，也不得只给裸数字不写 %。
-
+与根目录 `AGENTS.md`「结果表规范」保持一致：统一以 `首次分配 (place_once)` 为基线，相对基线的变化百分比写在数值旁边（如 `19.2 (+50%)`），粗体标出该列最优值。新实验结果表不得改用 `free` 当基线，也不得只列裸数字而不写相对百分比。

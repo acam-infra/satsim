@@ -1,4 +1,4 @@
-"""迁移链路代价接口。"""
+"""迁移链路传输开销接口。"""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Generator, Protocol

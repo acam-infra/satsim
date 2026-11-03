@@ -1,6 +1,6 @@
-# 环底稿 + thermal.mode=dynamic（一阶 RC 自热节流）。
-# 相对 base_ring_s1：补齐 ADR 0004 dynamic 必填项；调参使忙节点在 s1 horizon 内进入节流。
-# 调参动机见 docs/notes/dynamic_thermal_cost_claims.md；非完整轨道热平衡。
+# 四星环基础环境模板 + 动态温控模式（thermal.mode=dynamic，一阶 RC 升温降频）。
+# 相比 base_ring_s1：补齐 ADR 0004 动态温控必填项；调参使高负载节点在仿真时长内触发降频。
+# 调参原因见 docs/notes/dynamic_thermal_cost_claims.md；非完整轨道热平衡。
 nodes: 4
 topology: ring
 arrival_window_s: 900.0

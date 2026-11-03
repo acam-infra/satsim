@@ -108,7 +108,7 @@ def _arrival_times(
             if num_prompts is not None and len(times) >= num_prompts:
                 break
     else:
-        raise SpecError(f"sharegpt.arrival 只准入 deterministic/poisson/gamma，收到 {arrival}")
+        raise SpecError(f"sharegpt.arrival 只允许 deterministic/poisson/gamma，收到 {arrival}")
 
     if jitter:
         times = [min(window, max(0.0, ti + rng.uniform(-jitter, jitter))) for ti in times]

@@ -1,12 +1,12 @@
 schema: satsim.scene/v1
 name: scene_poisson_smoke_v1
 story: |
-  与主实验同构的四节点环，到达改为齐次泊松（线下生成）。
-  换位时刻用 absolute，避免多种子锚点漂移。
-  本文件只做冒烟，不支撑 C1/C2 主表。
+  与主实验相同的四星环拓扑，请求到达改为齐次泊松过程（离线生成）。
+  限功切换时刻使用固定绝对时间（absolute），避免不同随机种子下切换时刻漂移。
+  本文件仅用于冒烟测试，不产出论文主表数据。
 not_modeled:
   - 真实星历
-  - 主实验 claim 数字
+  - 主实验结论表数据
 mirrors:
   cfg:
     nodes: 4

@@ -1,4 +1,4 @@
-"""C1/C2：按论文三档 scheduler × link_cost × nobg 选臂。"""
+"""C1/C2：按论文三档 scheduler × link_cost × nobg 选取策略。"""
 from __future__ import annotations
 
 import collections
@@ -74,9 +74,9 @@ def claim_summary(rows: list[dict], evidence: str) -> dict:
         "evidence": evidence,
         "claims_frame": "place_once_free_costly",
         "tiers": {
-            "1_place_once": "初次分配 only",
-            "2_rebalance_free": "实时再分配 · 无消耗",
-            "3_rebalance_costly": "有消耗再分配（random 基线；ours 待解决）",
+            "1_place_once": "首次分配（不迁移）",
+            "2_rebalance_free": "无消耗迁移",
+            "3_rebalance_costly": "占带宽迁移（随机迁移基线；自研策略待实现）",
         },
         "policies": {},
     }
@@ -110,7 +110,7 @@ def claim_summary(rows: list[dict], evidence: str) -> dict:
             )
         summary["C1"] = dict(
             claim="runtime_rebalance_needed",
-            narrative="初次分配解决不了换位；无消耗的实时再分配把请求再放到仍有功率的节点",
+            narrative="首次分配解决不了限功切换；无消耗迁移把请求再放到仍有算力的节点",
             arms=dict(place_once="place_once/off", rebalance_free="rebalance_free/off"),
             first_good_long=st["good_long_mean"],
             rebalance_good_long=fr["good_long_mean"],
@@ -138,7 +138,7 @@ def claim_summary(rows: list[dict], evidence: str) -> dict:
             )
         c2 = dict(
             claim="link_cap_contention",
-            narrative="有消耗再分配走链路；与背景流争用带宽时，随机基线搬不完、收益掉回去",
+            narrative="占带宽迁移走星间链路；与背景流抢带宽时，随机迁移传不完、收益掉回去",
             arms=dict(
                 rebalance_free="rebalance_free/off",
                 rebalance_random="rebalance_random/full",
@@ -165,7 +165,7 @@ def claim_summary(rows: list[dict], evidence: str) -> dict:
     if ours:
         summary["ours"] = dict(
             status="todo",
-            note="rebalance_ours：有消耗再分配待解决，当前 maybe_rebalance 为空操作",
+            note="rebalance_ours：占带宽迁移的自研策略待实现，当前 maybe_rebalance 为空操作",
             n_rows=len(ours),
             goodput_tok_s_mean=_policy_block(ours)["goodput_tok_s_mean"],
             migrations_mean=_policy_block(ours)["migrations_mean"],

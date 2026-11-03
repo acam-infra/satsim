@@ -1,9 +1,9 @@
-# 跨轨 E★ 加严争用（入口：scripts/exp_orbit_estar_contention.py）
-# 叙事镜像：../scenes/scene_orbit_planes_estar_contention_v1.yaml（本文件不走 resolve_spec）
-# 拓扑：orbit_planes 2×2 grid；E★=(0,2)
-# 功率：换位后暗 0+1、亮 2+3（place_once 仍有亮星可活）；有代价臂目标收束到 2
-# 突发：控制拍内尽量填满 inflight（sync_burst）
-# 主轴 link_gbps；辅 timeout / control / caps；bg=0
+# 跨轨瓶颈链路 E★ 拥塞实验（运行入口：scripts/exp_orbit_estar_contention.py）
+# 场景背景说明：../scenes/scene_orbit_planes_estar_contention_v1.yaml（本文件不走常规 resolve_spec）
+# 拓扑：orbit_planes 2×2 网格；瓶颈边 E★=(0,2)
+# 供电限制：限功切换后卫星 0 和 1 变暗降频、卫星 2 和 3 保持满血；占带宽迁移策略将目标集中到卫星 2
+# 突发设置：每个控制周期尽量填满并发迁移流（sync_burst）
+# 核心变量：link_gbps；辅助参数：timeout / control / 并发上限；背景流 bg=0
 name: exp_orbit_planes_estar_contention_v1
 base: base_orbit_planes_s1.yaml
 trace:
@@ -30,7 +30,7 @@ contention:
   max_inflight: 32
   max_out: 8
   corridor_bright_node: 2
-  # 换位后额外压暗的节点（默认已压 node0；此处再压 1，逼 0/1→2 共享 E★）
+  # 限功切换后额外限制功耗的节点（默认已限制 node0；此处再限制 node1，迫使 0/1→2 共享瓶颈边 E★）
   extra_dark_after_swap: [1]
   sync_burst: true
 arms:

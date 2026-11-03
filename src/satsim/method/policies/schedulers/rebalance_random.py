@@ -1,4 +1,4 @@
-"""有消耗再分配 · random 基线：随机选请求；目标只在比源更亮的节点中随机。"""
+"""占带宽迁移 · 随机基线：随机选请求；目标只在比源算力更高的节点中随机。"""
 from __future__ import annotations
 
 from satsim.method.engine.world import MAX_INFLIGHT, MAX_OUT
@@ -6,7 +6,7 @@ from satsim.method.policies.schedulers._placement import place_by_iter_time
 
 
 class RebalanceRandomScheduler:
-    """有链路代价下的随机再分配基线（目标须比源更亮）。"""
+    """占星间带宽时的随机迁移基线（目标算力须高于源节点）。"""
 
     id = "rebalance_random"
 

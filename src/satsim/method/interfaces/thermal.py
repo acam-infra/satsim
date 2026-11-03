@@ -1,11 +1,11 @@
-"""节点时钟倍率：显式功率帽时间线，或动态温度→节流。"""
+"""节点时钟倍率：定时限功时间表，或动态温度触发降频。"""
 from __future__ import annotations
 
 from typing import Protocol, Sequence
 
 
 class ThermalModel(Protocol):
-    """World.f_of / iter_of 只认这个接口；decode 与调度臂不感知后端。"""
+    """World.f_of / iter_of 只认这个接口；推理循环与调度策略不感知具体温控实现。"""
 
     mode: str  # explicit | dynamic
 

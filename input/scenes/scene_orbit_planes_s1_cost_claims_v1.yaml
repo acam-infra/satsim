@@ -1,16 +1,16 @@
 schema: satsim.scene/v1
 name: scene_orbit_planes_s1_cost_claims_v1
 story: |
-  两壳层轨道连边快照（sensing×2 + compute×2）上的三档 e2e。
-  启动时按距离门限生成一次 ISL（边表为 (0,1)(0,2)(1,3)(2,3)，类 2×2 grid）；
-  过境合成与功率帽换位、背景流、C1/C2 口径与 ring 的 exp_ring_s1_cost_claims_v3 对齐，
-  只换拓扑来源：orbit_planes 快照而非写死 ring。
+  双轨道面静态轨道拓扑（2 颗遥感星 sensing + 2 颗算力星 compute）上的三档调度策略对比。
+  启动时按最大通信距离生成一次固定星间链路（连边为 (0,1)(0,2)(1,3)(2,3)，呈 2×2 网格）；
+  模拟过境请求流、限功切换、背景流量以及 C1/C2 评估口径均与四星环主实验 exp_ring_s1_cost_claims_v3 对齐，
+  唯一区别是拓扑由 orbit_planes 轨道参数生成而非固定环。
 not_modeled:
-  - 连续星历驱动
-  - 逐 tick 可见性重连
+  - 连续星历运动
+  - 逐时刻可见性重连
   - Walker / 全星座规模
-  - 传感任务链与仅算力驻留约束（角色仅为元数据）
-  - 完整轨道热平衡/食季（本 claim 场景仍用显式功率帽；可选 dynamic 仅为一阶 RC 示意）
+  - 遥感任务链与仅算力星运行约束（节点角色仅为元数据）
+  - 完整轨道热平衡/食季（本场景使用定时限功模式；可选 dynamic 仅为一阶 RC 温控模型）
 mirrors:
   cfg:
     nodes: 4

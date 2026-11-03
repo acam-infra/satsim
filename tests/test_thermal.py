@@ -46,7 +46,7 @@ def test_dynamic_heats_and_throttles():
         R_th=0.5,  # °C/W；忙时稳态 ~ T_amb + 150 = 170，很快过 84
         T_amb_C=20.0,
         T0_C=40.0,
-        T_throttle_C=84.0,  # LAB-1178/1214 叙事
+        T_throttle_C=84.0,  # LAB-1178/1214 温度阈值
         T_release_C=78.0,
         f_throttle=0.71,
         P_busy=300.0,

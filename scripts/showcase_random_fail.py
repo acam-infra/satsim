@@ -289,10 +289,10 @@ def main() -> None:
     sp0 = spotlight[0] if spotlight else {}
     brief = {
         "story_zh": (
-            f"场景 exp_ring_s1_cost_claims_v3、种子 {seed}：功率帽换位 T_SWAP={t_swap_s:.0f}s 前，"
-            f"node2 已被压到 P={p_cap}。free 几乎不乱动，换位后把人从暗星迁到亮星"
+            f"场景 exp_ring_s1_cost_claims_v3、种子 {seed}：限功切换 T_SWAP={t_swap_s:.0f}s 前，"
+            f"node2 已被限制到 P={p_cap}。无消耗迁移几乎不动，切换后把请求从降频星迁到满血星"
             f"（good_long {mf['good_long']}/{mf['n_long']}）。"
-            f"random 却在换位前乱迁：例如 t≈{sp0.get('t_start', '?')}s 把长请求 "
+            f"随机迁移却在切换前乱迁：例如 t≈{sp0.get('t_start', '?')}s 把长请求 "
             f"#{sp0.get('req','?')} 从 node{sp0.get('src','?')} 往暗星 node{sp0.get('dst','?')} 搬，"
             f"{'链路堵死超时 abort（人留原地）' if sp0.get('aborted') else '成功搬进更暗节点'}；"
             f"全剧 abort={mr['migration_abort']}、link≈{mr['link_traffic_GB']:.0f}GB，"

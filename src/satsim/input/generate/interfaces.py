@@ -14,5 +14,5 @@ class ArrivalProcess(Protocol):
         p_long: float,
         seed: int,
     ) -> tuple[list[Request], float, int]:
-        """返回 (请求列表, 换位锚点时刻, 簇计数)。"""
+        """返回 (请求列表, 限功切换锚点时刻, 到达簇计数)。"""
         ...

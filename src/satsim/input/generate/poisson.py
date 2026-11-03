@@ -1,4 +1,4 @@
-"""泊松到达：线下生成完整序列；已准入 trace.kind=poisson。"""
+"""泊松到达：离线生成完整序列；已支持 trace.kind=poisson。"""
 from __future__ import annotations
 
 import random

@@ -1,3 +1,7 @@
-# 热路径收成可插拔 ThermalModel
+# 温控与降频抽象为可插拔的 `ThermalModel` 接口
 
-`World.f_of` 原先内联读 `thermal.explicit_events` 再走 DVFS。为把 lab 里的自动温度曲线/动态节流接进来又不改 decode 与调度臂，把「节点此时钟倍率」收成 `ThermalModel` 协议：`clock_factor(node, t)` + 控制周期 `advance`。工厂键 `thermal.mode`：`explicit`（缺省，行为与旧路径一致）| `dynamic`（每节点一阶 RC + 滞回两档节流）。decode_proc 不出现热分支；新后端只加 policies/thermal 与 schema 准入。
+原先 `World.f_of` 直接在函数内部读取 `thermal.explicit_events`（定时限功时间表）并通过 DVFS 公式计算节点的算力频率倍率。为了接入“卫星随计算负载发热升温、超温自动降频”的动态温控模型，同时不侵入修改推理生成循环（`decode_proc`）和三档调度器代码，我们将“查询节点当前算力频率倍率”抽象为统一的 `ThermalModel` 接口：提供 `clock_factor(node, t)` 查询当前频率倍率，以及 `advance()` 在每个控制周期推进温度状态。
+
+通过配置项 `thermal.mode` 切换两种模式：
+- `explicit`（默认，**定时限功模式**）：按预设时间表直接限制功耗并折算频率，行为与历史基准完全一致；
+- `dynamic`（**动态温控模式**）：每颗卫星按一阶热阻热容（RC）公式随负载升温，采用带回差的温度阈值触发降频与恢复。

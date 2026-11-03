@@ -1,4 +1,4 @@
-"""轨道连边快照：边生成、图 BFS、冒烟跑通。"""
+"""静态轨道拓扑：边生成、图 BFS、冒烟跑通。"""
 from __future__ import annotations
 
 from pathlib import Path
