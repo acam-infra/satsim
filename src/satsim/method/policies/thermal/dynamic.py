@@ -32,6 +32,8 @@ class DynamicThermal:
         self._f = [1.0] * n
         self._t = 0.0
         self._loads = [0] * n
+        self._peak_T = list(self._T)
+        self._throttle_time_s = [0.0] * n
         self._sync_f()
 
     def _power(self, j: int) -> float:
@@ -68,10 +70,14 @@ class DynamicThermal:
             return False
         # 用步进前的节流态算功率，再积分温度，最后刷新滞回
         for j in range(self.n):
+            if self._throttled[j]:
+                self._throttle_time_s[j] += dt
             p = self._power(j)
             t_eq = self.T_amb_C + self.R_th * p
             decay = math.exp(-dt / self.tau_s)
             self._T[j] = t_eq + (self._T[j] - t_eq) * decay
+            if self._T[j] > self._peak_T[j]:
+                self._peak_T[j] = self._T[j]
         return self._apply_hysteresis()
 
     def advance(self, t: float, node_loads: Sequence[int]) -> bool:
@@ -93,3 +99,13 @@ class DynamicThermal:
     def temperature(self, node: int) -> float:
         """测试与诊断用。"""
         return self._T[node]
+
+    def diagnostics(self) -> dict:
+        """峰值温度与累计节流时间（秒），供实验小结。"""
+        return {
+            "peak_T_C": list(self._peak_T),
+            "peak_T_C_max": max(self._peak_T) if self._peak_T else None,
+            "throttle_time_s": list(self._throttle_time_s),
+            "throttle_time_s_sum": float(sum(self._throttle_time_s)),
+            "nodes_ever_throttled": int(sum(1 for x in self._throttle_time_s if x > 0)),
+        }

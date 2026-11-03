@@ -56,6 +56,10 @@ uv sync
 - 跑：`.venv/bin/satsim configs/exp_orbit_planes_s1_cost_claims_v1.yaml`；ADR：`docs/adr/0003-orbit-planes-topology-snapshot.md`。
 
 
+## 自热 dynamic 试跑（`exp_ring_s1_dynamic_thermal_v1`）
+
+`thermal.mode=dynamic` 对齐 s1 负载；**尚未**造出 C1（free ≫ place_once）。seeds 1–3：good_long 首次 12.0 / free 8.67（−28%）/ random 3.0；req/s·tok/s 全臂持平；四节点均进节流。细节与下一旋钮：`docs/notes/dynamic_thermal_cost_claims.md`。
+
 ## 跨轨 E★ 加严争用（`exp_orbit_planes_estar_contention_v1`）
 
 构造：换位后暗 0+1、亮 2+3；有代价臂 **sync_burst 迁向 node2**，路径共享 E★=`(0,2)`。主轴 `link_gbps=0.5`，辅 timeout=30 / control=0.25 / 高并发；bg=0。每请求只尝试一次（避免 abort 重试刷爆）。

@@ -85,7 +85,7 @@ def run_one(cfg: dict, policy: dict, seed: int, trace: dict, t_swap_s: float, sl
             tok_slo_out += r.pout
             if r.long:
                 good_long += 1
-    return row_from_run(
+    row = row_from_run(
         good_long=good_long,
         n_long=n_long,
         n_completed=n_completed,
@@ -105,3 +105,10 @@ def run_one(cfg: dict, policy: dict, seed: int, trace: dict, t_swap_s: float, sl
         n_req=len(reqs),
         horizon_s=horizon,
     )
+    diag = getattr(world.thermal, "diagnostics", None)
+    if callable(diag):
+        d = diag()
+        row["thermal_peak_T_C_max"] = d.get("peak_T_C_max")
+        row["thermal_throttle_time_s_sum"] = d.get("throttle_time_s_sum")
+        row["thermal_nodes_ever_throttled"] = d.get("nodes_ever_throttled")
+    return row

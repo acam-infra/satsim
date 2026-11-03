@@ -1,0 +1,51 @@
+# 环底稿 + thermal.mode=dynamic（一阶 RC 自热节流）。
+# 相对 base_ring_s1：补齐 ADR 0004 dynamic 必填项；调参使忙节点在 s1 horizon 内进入节流。
+# 调参动机见 docs/notes/dynamic_thermal_cost_claims.md；非完整轨道热平衡。
+nodes: 4
+topology: ring
+arrival_window_s: 900.0
+drain_s: 1200
+control_period_s: 1.0
+model:
+  layers: 32
+  kv_heads: 8
+  head_dim: 128
+  bytes_per_elem: 2
+gpu:
+  kv_gib: 24.0
+  t_fixed_s: 0.003
+  t_weights_s: 0.01
+  t_kv_tok_s: 1.0e-7
+  t_seq_s: 5.0e-5
+  mem_freq_exp: 0.6
+thermal:
+  mode: dynamic
+  P_idle: 60
+  P_max: 300
+  gamma: 2.4
+  f_min: 0.35
+  # RC：忙时 Teq≈T_amb+R_th*P_busy；tau 取短使 ~数十秒内过阈（示意，非星上热容标定）
+  tau_s: 25.0
+  R_th: 0.45
+  T_amb_C: 20.0
+  T0_C: 50.0
+  T_throttle_C: 84.0
+  T_release_C: 78.0
+  # 相对 LAB 默认 0.71 压低，使节流幅度更接近 explicit P_cap=80→f≈0.35，便于对照 C1 量级
+  f_throttle: 0.40
+  P_busy: 300.0
+net:
+  link_gbps: 10.0
+  hop_latency_s: 0.005
+background:
+  gbps_per_node: 2.375
+  strict_priority: true
+  pairs:
+    - [0, 2]
+    - [1, 2]
+cost:
+  mode: free
+  timeout_s: 120.0
+  switch_s: 0.02
+workload:
+  p_long: 0.2

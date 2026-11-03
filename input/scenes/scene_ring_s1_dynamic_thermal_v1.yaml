@@ -1,0 +1,34 @@
+schema: satsim.scene/v1
+name: scene_ring_s1_dynamic_thermal_v1
+story: |
+  与 scene_inferred_orbit_pod_v3 同环、同合成过境负载；热路径改为 thermal.mode=dynamic：
+  忙节点一阶 RC 升温，越过阈值后两档节流（非显式功率帽换位）。
+  t_swap 仍作指标「换位后」窗口锚点；explicit_events 会被写入但 dynamic 后端不读。
+  问：自热 alone 能否拉开首次分配 vs 无消耗再分配（C1），以及有消耗随机是否相对 free 掉回去（C2）。
+not_modeled:
+  - 真实星历和六根数
+  - 时变 ISL
+  - 全星座规模
+  - 完整轨道热平衡/食季（本场景为一阶 RC 示意）
+  - 显式功率帽换位作为热因（改由自热）
+  - STAC L1 的真实到达时刻
+mirrors:
+  cfg:
+    nodes: 4
+    topology: ring
+    arrival_window_s: 900.0
+    net.link_gbps: 10.0
+    background.gbps_per_node: 2.75
+    background.strict_priority: true
+    gpu.kv_gib: 24.0
+    workload.p_long: 0.2
+    cost.timeout_s: 120.0
+    thermal.mode: dynamic
+  spec:
+    t_swap.anchor: max_cluster
+    t_swap.offset_s: 40
+    t_swap.P_cap: 80
+    trace.kind: synthetic_pass
+    trace.compress_horizon_s: 60
+    trace.pack_window_s: 900
+    trace.target_n: 88
