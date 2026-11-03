@@ -97,9 +97,11 @@ def main(argv: list[str] | None = None) -> None:
     for pol, row in claims["policies"].items():
         print(
             f"  {pol:28} {row.get('scheduler')}/{row.get('link_cost')}"
+            f"  req/s={_fmt(row.get('request_throughput_rps_mean', float('nan')))}"
+            f"  tok/s={_fmt(row.get('total_token_throughput_tok_s_mean', float('nan')))}"
             f"  good_long={_fmt(row['good_long_mean'])}"
-            f"  goodput={_fmt(row['goodput_tok_s_mean'])}"
-            f"  link_traffic_GB={_fmt(row['link_traffic_GB_mean'])}"
+            f"  goodput_slo={_fmt(row['goodput_tok_s_mean'])}"
+            f"  link_GB={_fmt(row['link_traffic_GB_mean'])}"
             f"  abort={_fmt(row['migration_abort_mean'])}"
         )
     if "C1" in claims:

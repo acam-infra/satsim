@@ -46,3 +46,10 @@ policies:
 \* 有消耗档为付费迁移所必需；与 goodput 权衡。
 
 主结果数字见根目录 `README.md`。
+
+## 吞吐
+
+- `request_throughput_rps` = \#completed / (`arrival_window_s`+`drain_s`)
+- `total_token_throughput_tok_s` = Σ(prompt+output of completed) / 同上 horizon
+- `goodput_tok_s` 仍为 SLO 过滤的输出 token / `arrival_window_s`（claim 对照）
+

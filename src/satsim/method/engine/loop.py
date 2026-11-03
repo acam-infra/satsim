@@ -64,23 +64,34 @@ def run_one(cfg: dict, policy: dict, seed: int, trace: dict, t_swap_s: float, sl
     env.process(control_proc(env, world))
     for req in reqs:
         req.proc = env.process(decode_proc(env, world, req))
-    tend = float(cfg["arrival_window_s"]) + float(cfg["drain_s"])
-    env.run(until=tend)
-    good_long = n_long = 0
-    tok = 0
+    arrival_window = float(cfg["arrival_window_s"])
+    horizon = arrival_window + float(cfg["drain_s"])  # 仿真使役时间 = 到达窗 + drain
+    env.run(until=horizon)
+    good_long = n_long = completed_long = n_completed = 0
+    tok_slo_out = 0
+    tok_total = 0  # prompt + output for completed
     for r in reqs:
         if r.long:
             n_long += 1
+        if r.t_done is not None:
+            n_completed += 1
+            tok_total += int(r.pin) + int(r.pout)
+            if r.long:
+                completed_long += 1
         post = (r.post_time / r.post_tok) if r.post_tok >= 1 else 0.0
         ok = r.t_done is not None and post <= slo
         if ok:
-            tok += r.pout
+            tok_slo_out += r.pout
             if r.long:
                 good_long += 1
     return row_from_run(
         good_long=good_long,
         n_long=n_long,
-        goodput_tok_s=tok / float(cfg["arrival_window_s"]),
+        n_completed=n_completed,
+        completed_long=completed_long,
+        request_throughput_rps=n_completed / horizon,
+        total_token_throughput_tok_s=tok_total / horizon,
+        goodput_tok_s=tok_slo_out / arrival_window,
         migrations=world.acc["mig"],
         migration_abort=world.acc["abort"],
         migrated_GB=world.acc["mig_bytes"] / 1e9,
@@ -91,4 +102,5 @@ def run_one(cfg: dict, policy: dict, seed: int, trace: dict, t_swap_s: float, sl
         max_cluster_t=anchor,
         max_cluster_n=cluster_n,
         n_req=len(reqs),
+        horizon_s=horizon,
     )
