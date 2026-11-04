@@ -15,7 +15,7 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-import numpy as np
+import math
 import simpy
 import yaml
 
@@ -120,6 +120,23 @@ def _apply_thermal(cfg: dict, t_swap_s: float, p_cap: float, extra_dark: list[in
             continue  # already dark after swap
         events.append([j, float(t_swap_s), 1.0e9, float(p_cap)])
     cfg["thermal"]["explicit_events"] = events
+
+
+def _percentile(xs: list[float], q: float) -> float:
+    if not xs:
+        return float("nan")
+    s = sorted(xs)
+    k = (len(s) - 1) * (q / 100.0)
+    f = math.floor(k)
+    c = math.ceil(k)
+    if f == c:
+        return float(s[int(k)])
+    return float(s[f] * (c - k) + s[c] * (k - f))
+
+
+def _mean(xs: list[float]) -> float:
+    return float(sum(xs) / len(xs)) if xs else 0.0
+
 
 
 def _latencies(reqs) -> list[float]:
@@ -228,17 +245,19 @@ def run_one(cfg, pol, seed, trace, t_swap_s, slo, *, track: bool, scheduler=None
         n_mig_events=len(events),
         n_via_estar=len(via),
         abort_via_estar=sum(1 for e in via if e["aborted"]),
-        lat_p50=float(np.percentile(lats, 50)) if lats else float("nan"),
-        lat_p99=float(np.percentile(lats, 99)) if lats else float("nan"),
-        mean_mig_dur=float(np.mean([e["dur_s"] for e in events])) if events else 0.0,
-        mean_estar_dur=float(np.mean([e["dur_s"] for e in via])) if via else 0.0,
+        lat_p50=_percentile(lats, 50),
+        lat_p99=_percentile(lats, 99),
+        mean_mig_dur=_mean([e["dur_s"] for e in events]),
+        mean_estar_dur=_mean([e["dur_s"] for e in via]),
     )
     return row, extra, events
 
 
 def mean_std(xs: list[float]) -> dict:
-    a = np.asarray(xs, dtype=float)
-    return dict(mean=float(np.mean(a)), std=float(np.std(a)), n=int(len(a)))
+    n = len(xs)
+    m = _mean(xs)
+    var = sum((x - m) ** 2 for x in xs) / n if n else 0.0
+    return dict(mean=float(m), std=float(math.sqrt(var)), n=int(n))
 
 
 def pct(val: float, base: float) -> str:
@@ -273,6 +292,7 @@ def main() -> None:
         "place_once": {"scheduler": "place_once", "link_cost": "off"},
         "rebalance_free": {"scheduler": "rebalance_free", "link_cost": "off", "hysteresis": 0.15},
         "rebalance_random": {"scheduler": "rebalance_random", "link_cost": "full"},
+        "rebalance_ours": {"scheduler": "rebalance_ours", "link_cost": "full"},
     }
 
     _set_caps(int(kn["max_inflight"]), int(kn["max_out"]))
@@ -298,7 +318,7 @@ def main() -> None:
                     exp["trace"],
                     t_swap_s,
                     slo,
-                    track=(arm == "rebalance_random"),
+                    track=(arm in ("rebalance_random", "rebalance_ours")),
                     scheduler=sched,
                 )
                 rec = dict(
@@ -352,6 +372,7 @@ def main() -> None:
         ("place_once", "首次分配"),
         ("rebalance_free", "无消耗迁移"),
         ("rebalance_random", "占带宽迁移·瓶颈汇聚"),
+        ("rebalance_ours", "自研迁移 (rebalance_ours)"),
     ]
     best_gl = max(order, key=lambda x: summary[x[0]]["good_long"]["mean"])[0]
     best_gp = max(order, key=lambda x: summary[x[0]]["goodput"]["mean"])[0]

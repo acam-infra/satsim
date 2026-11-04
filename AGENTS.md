@@ -9,6 +9,7 @@
 - 插件与接口规格：`docs/SPEC_PLUGIN_FRAMEWORK.md`。
 - 温控与降频模式：`thermal.mode` 支持 `explicit`（定时限功）与 `dynamic`（动态温控，见 ADR 0004）。
 - 实验结果主表：`README.md`。
+- 自研迁移的并行思路：`docs/ideas/`，每条思路一个文件、一个分支、一个调度器文件，隔离规则见 `docs/ideas/README.md`。
 
 配置文件命名规范：
 - `base_*`：基础环境模板（定义硬件、拓扑、温控参数，不可直接运行）

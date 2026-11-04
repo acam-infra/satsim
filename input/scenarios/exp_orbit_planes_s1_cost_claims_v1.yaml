@@ -36,6 +36,9 @@ policies:
   rebalance_random:
     scheduler: rebalance_random
     link_cost: "full"
+  rebalance_ours:
+    scheduler: rebalance_ours
+    link_cost: "full"
   rebalance_free_nobg:
     scheduler: rebalance_free
     link_cost: "off"

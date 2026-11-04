@@ -37,6 +37,7 @@ arms:
   - place_once
   - rebalance_free
   - rebalance_random
+  - rebalance_ours
 seeds: [1, 2, 3, 4, 5]
 slo:
   tpot_slo: 0.032

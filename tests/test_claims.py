@@ -62,3 +62,7 @@ def test_benefit_and_link_cost():
     # 无背景时随机占带宽迁移仍可能慢于 free，但超时中断应减少
     assert c2["nobg"]["rebalance_link_abort_mean"] < c2["rebalance_link_abort_mean"]
     assert payload["claims"]["ours"]["status"] == "todo"
+    ours_pol = payload["claims"]["policies"]["rebalance_ours"]
+    rand_pol = payload["claims"]["policies"]["rebalance_random"]
+    assert ours_pol["goodput_tok_s_mean"] > rand_pol["goodput_tok_s_mean"]
+    assert ours_pol["migration_abort_mean"] == 0.0
