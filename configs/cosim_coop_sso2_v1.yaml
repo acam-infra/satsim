@@ -1,0 +1,58 @@
+# 协同仿真: orbitsim 轨道轨迹 (Walker 53° 4×10 + 3 颗遥感星) 驱动推理网络。
+# 轨迹由 orbitsim/export_cosim.py 生成 (coop-sso2), 复制在 input/traces/ 保证可复现。
+# 运行: uv run satsim-cosim configs/cosim_coop_sso2_v1.yaml --viz ../orbitsim/viz/public/playback
+name: cosim_coop_sso2_v1
+title: "协同仿真 · SOW S-SSO2 (4 簇 × 4 星, 簇间不连通) 服务 3 颗遥感星"
+description: >-
+  遥感星每分钟各提交 4 个推理请求 (35% 长任务 6k-18k token, 上传 500 MB 图块);
+  算力星进地影限功 80 W (时钟约 0.35×); 星间链路按 orbitsim 星历断开与恢复;
+  结果必须经星间链路回到发起的遥感星才算交付。
+trace: ../input/traces/coop-sso2.trace.json
+scenario: ../input/traces/coop-sso2.scenario.json
+delivery: final          # final: 只看结果是否按时回到遥感星 | stream: 另要求解码期间与遥感星保持连通
+control_period_s: 2.0
+frame_s: 10.0
+model: {layers: 32, kv_heads: 8, head_dim: 128, bytes_per_elem: 2}
+gpu:
+  kv_gib: 24.0
+  t_fixed_s: 0.003
+  t_weights_s: 0.01
+  t_kv_tok_s: 1.0e-7
+  t_seq_s: 5.0e-5
+  mem_freq_exp: 0.6
+power:                   # 和 base_*_s1 的 thermal 同参; 地影内功率上限 P_dark
+  P_idle: 60
+  P_max: 300
+  gamma: 2.4
+  f_min: 0.35
+  P_dark: 80
+net:
+  link_gbps: {intra: 10.0, inter: 10.0, rs: 5.0}
+  hop_latency_s: 0.005
+migration:
+  timeout_s: 120.0
+  switch_s: 0.02
+workload:
+  arrival_window_s: 5400
+  rate_per_rs_per_min: 4
+  p_long: 0.35
+  long_out: [6000, 18000]
+  short_out: [200, 1200]
+  long_pin: 2000
+  short_pin: 500
+  long_upload_MB: 500
+  short_upload_MB: 50
+slo:
+  deadline_factor_long: 2.0
+  deadline_factor_short: 4.0
+  min_deadline_s: 120
+  max_stall_frac: 0.1
+policy:
+  stall_weight: 1.0
+policies:
+  greedy: {policy: greedy}
+  reactive: {policy: reactive}
+  ephemeris: {policy: ephemeris}
+  contact_aware: {policy: contact_aware}
+seeds: [1, 2, 3]
+record_seed: 1
