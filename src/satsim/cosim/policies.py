@@ -83,6 +83,13 @@ def inflight(w) -> int:
     return sum(1 for rs in w.nodes.values() for r in rs if r.migrating)
 
 
+def iter_time_of(w, j: int, residents) -> float:
+    """Iteration time of node j if only ``residents`` were on it (current power state)."""
+    from satsim.method.engine.timing import iter_time
+
+    return iter_time(max(len(residents), 1), sum(x.kv for x in residents), w.f_of(j), w.gpu)
+
+
 class Greedy:
     id = "greedy"
 
@@ -139,14 +146,31 @@ class Reactive(Greedy):
 
 
 class ContactAware(Ephemeris):
+    """Ephemeris placement + migration scored on the whole node pair, not just the mover.
+
+    net gain = mover's predicted delivery gain
+             + speed-up of the requests left behind on the source
+             - slow-down imposed on the requests already on the destination
+    (each side: Δ iteration time × their remaining tokens). One inbound move per destination per
+    tick, and destinations with an inbound migration in flight are skipped, so a lit satellite is
+    not flooded by every request that sees it at once. ``externality=False`` gives the v1 policy
+    that scores the mover alone (it over-migrates under load; see docs/notes).
+    """
+
     id = "contact_aware"
 
-    def __init__(self, margin_s: float = 20.0, margin_frac: float = 0.1, every: int = 2, max_hops: int = 6):
+    def __init__(self, margin_s: float = 20.0, margin_frac: float = 0.1, every: int = 2, max_hops: int = 6,
+                 externality: bool = True):
         self.margin_s = margin_s
         self.margin_frac = margin_frac
         self.every = every
         self.max_hops = max_hops
+        self.externality = externality
         self._tick = 0
+
+    @staticmethod
+    def _others_delay(w, j: int, exclude, d_it: float) -> float:
+        return d_it * sum(x.remaining for x in w.nodes[j] if x is not exclude)
 
     def rebalance(self, w) -> None:
         self._tick += 1
@@ -156,6 +180,7 @@ class ContactAware(Ephemeris):
         budget = MAX_INFLIGHT - inflight(w)
         if budget <= 0:
             return
+        inbound = {j for j in w.tr.compute if w.reserved[j] > 0}
         moves = []
         for j in w.tr.compute:
             for r in w.nodes[j]:
@@ -166,9 +191,14 @@ class ContactAware(Ephemeris):
                     continue
                 it_here = w.iter_of(j)
                 nbytes = r.kv * w.bpt
+                relief = 0.0
+                if self.externality and len(w.nodes[j]) > 1:
+                    rest = [x for x in w.nodes[j] if x is not r]
+                    it_without = iter_time_of(w, j, rest)
+                    relief = self._others_delay(w, j, r, it_here - it_without)
                 best = None
                 for k in w.tr.compute:
-                    if k == j or not w.fits(k, r):
+                    if k == j or not w.fits(k, r) or (self.externality and k in inbound):
                         continue
                     p = w.tr.path(j, k, t)
                     if p is None or len(p[1]) > self.max_hops:
@@ -179,13 +209,23 @@ class ContactAware(Ephemeris):
                     left = max(0.0, r.remaining - dt / it_here)
                     move = predicted_cost(w, k, r, t + dt, left, joining=True)
                     gain = stay - move
+                    if self.externality:
+                        burden = self._others_delay(w, k, None, w.iter_of(k, r) - w.iter_of(k))
+                        gain += relief - burden
                     if gain > max(self.margin_s, self.margin_frac * (stay - t)) and (best is None or gain > best[0]):
                         best = (gain, k)
                 if best is not None:
                     moves.append((best[0], r, best[1]))
         moves.sort(key=lambda m: -m[0])
-        for _, r, k in moves[:budget]:
-            w.migrate(r, k)
+        taken: set[int] = set()
+        for _, r, k in moves:
+            if budget <= 0:
+                break
+            if self.externality and k in taken:
+                continue
+            if w.migrate(r, k):
+                taken.add(k)
+                budget -= 1
 
     @staticmethod
     def _at_risk(w, j, r, t, stay) -> bool:

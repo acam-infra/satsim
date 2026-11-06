@@ -1,0 +1,63 @@
+# 场景: 台风应急 — 遥感星在轨提交长时 agentic 推理会话, Walker 53° 算力星座服务。
+# 轨迹同 cosim_coop_w53_v1 (orbitsim/export_cosim.py coop-w53)。
+# 运行: uv run satsim-cosim configs/cosim_typhoon_agentic_v1.yaml --viz ../orbitsim/viz/public/playback
+name: cosim_typhoon_agentic_v1
+title: "台风应急 · 3 颗遥感星提交长时推理会话, Walker 53° 4×10 算力星座服务"
+description: >-
+  春分日 2 小时, 三颗遥感星 (RS-1030 / RS-1330 / RS-SAR) 持续成像台风区, 每颗每分钟提交 12 个请求:
+  一半是长时 agentic 会话 (灵异变化分析/灾情报告, 2-4 万 token, 单次解码 8-20 分钟),
+  一半是短问答。算力星每圈约 35 分钟在地影中限功到 0.35×; 结果必须经星间链路回到发起的遥感星,
+  长会话截止时间 = 到达 + 2× 亮星独占解码时间。
+takeaway: >-
+  过载时进影就搬 (反应式) 把长会话达标率从 60% 拖到 42%; 只算自己的迁移 (v1) 也输给不迁移;
+  把"给目标星上其他请求带来的拖慢"算进代价后, 接触感知迁移是唯一稳定赢过贪心的策略 (64.3%)。
+trace: ../input/traces/coop-w53.trace.json
+scenario: ../input/traces/coop-w53.scenario.json
+delivery: final
+control_period_s: 2.0
+frame_s: 10.0
+model: {layers: 32, kv_heads: 8, head_dim: 128, bytes_per_elem: 2}
+gpu:
+  kv_gib: 24.0
+  t_fixed_s: 0.003
+  t_weights_s: 0.01
+  t_kv_tok_s: 1.0e-7
+  t_seq_s: 5.0e-5
+  mem_freq_exp: 0.6
+power:
+  P_idle: 60
+  P_max: 300
+  gamma: 2.4
+  f_min: 0.35
+  P_dark: 80
+net:
+  link_gbps: {intra: 10.0, inter: 10.0, rs: 5.0}
+  hop_latency_s: 0.005
+migration:
+  timeout_s: 120.0
+  switch_s: 0.02
+workload:
+  arrival_window_s: 5400
+  rate_per_rs_per_min: 12
+  p_long: 0.5
+  long_out: [20000, 40000]
+  short_out: [200, 1200]
+  long_pin: 4000
+  short_pin: 500
+  long_upload_MB: 500
+  short_upload_MB: 50
+slo:
+  deadline_factor_long: 2.0
+  deadline_factor_short: 4.0
+  min_deadline_s: 120
+  max_stall_frac: 0.1
+policy:
+  stall_weight: 1.0
+policies:
+  greedy: {policy: greedy}
+  reactive: {policy: reactive}
+  ephemeris: {policy: ephemeris}
+  contact_aware_v1: {policy: contact_aware, externality: false}
+  contact_aware: {policy: contact_aware}
+seeds: [1, 2, 3]
+record_seed: 1

@@ -106,6 +106,7 @@ def write_playback(cfg: dict, trace: Trace, runs: dict, table: dict, viz_dir: Pa
         "name": cfg["name"],
         "title": cfg.get("title", cfg["name"]),
         "description": cfg.get("description", ""),
+        "takeaway": cfg.get("takeaway", ""),
         "delivery": cfg["delivery"],
         "frame_s": float(cfg.get("frame_s", 10.0)),
         "link_gbps": cfg["net"]["link_gbps"],
