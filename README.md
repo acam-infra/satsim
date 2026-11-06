@@ -15,6 +15,23 @@ uv sync
 .venv/bin/pytest
 ```
 
+## 协同仿真 (orbitsim 轨迹驱动)
+
+读取 orbitsim 导出的星间接触与地影轨迹（`input/traces/*.json`），在真实时变拓扑上对比四档在线推理调度策略，并可导出 3-D 回放数据供 `orbitsim/viz/play.html` 播放：
+
+```bash
+uv run satsim-cosim configs/cosim_coop_w53_v1.yaml --viz ../orbitsim/viz/public/playback
+```
+
+| 策略 | 放置与迁移机制 |
+|---|---|
+| `greedy` | **贪心放置（不迁移）**：新请求发往当前预计最快完成的连通算力星，不看未来地影与断链 |
+| `reactive` | **反应式迁移（进影就搬）**：贪心放置；算力星一旦进入地影，立即将请求迁移到当前最快的亮星 |
+| `ephemeris` | **星历放置（不迁移）**：利用已知星历预测整段解码与回传耗时来放置请求，运行中不迁移 |
+| `contact_aware` | **星历放置 + 接触感知迁移**：星历放置；当预测迁往另一颗星能显著提前交付（含 KV 传输开销）时触发迁移 |
+
+实验结果与结论见 [`docs/notes/cosim_contact_trace.md`](docs/notes/cosim_contact_trace.md)，引擎设计见 [`docs/adr/0005-cosim-contact-trace.md`](docs/adr/0005-cosim-contact-trace.md)。
+
 ## 配置文件命名（`base` / `exp` / `scene`）
 
 | 前缀 | 目录 | 作用 |
