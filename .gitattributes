@@ -1,0 +1,9 @@
+# Line endings: LF in the repo and the working tree on every OS (overrides core.autocrlf).
+* text=auto eol=lf
+*.png binary
+
+# orbitsim exports copied in by satcosim `python cosim.py trace`: data, not source
+input/traces/*.json -diff linguist-generated
+# committed with CRLF from csv.writer; keep the bytes as they are (data, not text to normalize)
+input/datasets/*.csv -text linguist-generated
+uv.lock -diff linguist-generated

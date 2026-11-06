@@ -98,12 +98,47 @@ def run(cfg: dict, viz_dir: Path | None = None, quiet: bool = False) -> dict:
     return payload
 
 
+def _sha256(path: Path) -> str:
+    import hashlib
+
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _git_head(repo: Path) -> str | None:
+    import subprocess
+
+    try:
+        out = subprocess.run(["git", "rev-parse", "--short=12", "HEAD"], cwd=repo, capture_output=True,
+                             text=True, timeout=10)
+        dirty = subprocess.run(["git", "status", "--porcelain", "--", "src", "configs"], cwd=repo,
+                               capture_output=True, text=True, timeout=10).stdout.strip()
+        return (out.stdout.strip() + ("+dirty" if dirty else "")) or None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def provenance(cfg: dict) -> dict:
+    """What produced a playback: lets satcosim `cosim.py check` flag playbacks older than their inputs."""
+    import hashlib
+
+    clean = {k: v for k, v in cfg.items() if not k.startswith("_")}
+    return {
+        "satsim_commit": _git_head(Path(__file__).resolve().parents[3]),
+        "trace_sha256": _sha256(_resolve(cfg, "trace")),
+        "scenario_sha256": _sha256(_resolve(cfg, "scenario")),
+        "config_sha256": hashlib.sha256(json.dumps(clean, sort_keys=True, default=str).encode()).hexdigest(),
+        "seeds": cfg["seeds"],
+        "record_seed": cfg.get("record_seed", cfg["seeds"][0]),
+    }
+
+
 def write_playback(cfg: dict, trace: Trace, runs: dict, table: dict, viz_dir: Path) -> Path:
     scenario = json.loads(_resolve(cfg, "scenario").read_text(encoding="utf-8"))
     trace_raw = json.loads(_resolve(cfg, "trace").read_text(encoding="utf-8"))
     body = {
         "schema": "satsim.cosim_playback/v1",
         "name": cfg["name"],
+        "provenance": provenance(cfg),
         "title": cfg.get("title", cfg["name"]),
         "description": cfg.get("description", ""),
         "takeaway": cfg.get("takeaway", ""),
@@ -122,7 +157,10 @@ def write_playback(cfg: dict, trace: Trace, runs: dict, table: dict, viz_dir: Pa
     idx_path = viz_dir / "index.json"
     idx = json.loads(idx_path.read_text(encoding="utf-8")) if idx_path.exists() else []
     idx = [e for e in idx if e["name"] != cfg["name"]]
-    idx.append({"name": cfg["name"], "title": body["title"], "policies": body["policies"]})
+    idx.append({"name": cfg["name"], "title": body["title"], "policies": body["policies"],
+                "trace_sha256": body["provenance"]["trace_sha256"],
+                "satsim_commit": body["provenance"]["satsim_commit"]})
+    idx.sort(key=lambda e: e["name"])
     idx_path.write_text(json.dumps(idx, ensure_ascii=False, indent=1), encoding="utf-8")
     return out
 
@@ -139,8 +177,13 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--out", default="")
     ap.add_argument("--viz", default="", help="directory for the viewer playback JSON")
     ap.add_argument("--set", action="append", default=[], help="override, e.g. workload.rate_per_rs_per_min=8")
+    ap.add_argument("--provenance-only", action="store_true",
+                    help="print the provenance a fresh run would record, as JSON, and exit")
     args = ap.parse_args(argv)
     cfg = load_config(Path(args.config), args.set)
+    if args.provenance_only:
+        print(json.dumps(provenance(cfg)))
+        return
     print(f"{cfg['name']}  delivery={cfg['delivery']}")
     payload = run(cfg, Path(args.viz) if args.viz else None)
     dest = Path(args.out) if args.out else Path("runs") / cfg["name"]

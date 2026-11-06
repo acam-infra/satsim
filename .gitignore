@@ -1,8 +1,21 @@
+# Python
 .venv/
-runs/
 __pycache__/
 *.pyc
+*.egg-info/
 .pytest_cache/
+
+# experiment outputs (summary.json, sweep CSVs).
+# The viewer playback is written to orbitsim/viz/public/playback and committed there.
+runs/
+
+# datasets: keep sampled CSV; ignore raw dumps
 input/datasets/*.json
 input/datasets/*.jsonl
-# keep sampled CSV; ignore raw dumps
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
