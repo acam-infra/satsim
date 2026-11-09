@@ -25,6 +25,7 @@ import simpy
 from satsim.cosim.net import FluidNet
 from satsim.cosim.trace import INF, Trace
 from satsim.method.engine.timing import clock_factor, iter_time, kv_bytes_per_tok
+from satsim.method.policies.thermal.dynamic import DynamicThermal
 
 CHUNK_S = 30.0  # longest decode step between re-evaluations when nothing pokes the request
 
@@ -54,6 +55,12 @@ class CRequest:
     migrating: bool = False
     proc: object = None
     trail: list = field(default_factory=list)  # nodes visited
+    output_budget: int | None = None  # declared cap, when provided by the workload
+    decode_step: tuple[float, float] | None = None  # start time and seconds per token
+
+    @property
+    def reserved_tokens(self) -> int:
+        return self.pin + (self.pout if self.output_budget is None else self.output_budget)
 
     @property
     def kv(self) -> float:
@@ -62,6 +69,13 @@ class CRequest:
     @property
     def remaining(self) -> float:
         return max(0.0, self.pout - self.gen)
+
+    def progress_at(self, now: float) -> float:
+        """Read partial decode progress without waking the SimPy process."""
+        if self.state != "decode" or self.decode_step is None:
+            return self.gen
+        start, iteration = self.decode_step
+        return self.gen + min(self.remaining, max(0.0, now - start) / iteration)
 
 
 class CoWorld:
@@ -88,19 +102,44 @@ class CoWorld:
         self.reqs: list[CRequest] = []
         self.topo_event = env.event()
         self.acc = dict(mig=0, mig_abort=0, mig_bytes=0.0, upload_fail=0)
+        thermal_cfg = cfg.get("thermal")
+        self.thermal = DynamicThermal({**cfg["power"], **thermal_cfg}, n=trace.n) if thermal_cfg else None
+        self.thermal_f = [self.thermal.clock_factor(j, 0.0) if self.thermal else 1.0 for j in range(trace.n)]
+        self.thermal_power_w = [float(cfg["power"]["P_idle"])] * trace.n
         env.process(self._changes())
         env.process(self._control())
 
     # -- node state --------------------------------------------------------------------------
     def f_of(self, j: int, t: float | None = None) -> float:
-        return self.f_dark if self.tr.is_dark(j, self.env.now if t is None else t) else 1.0
+        orbital_f = self.f_dark if self.tr.is_dark(j, self.env.now if t is None else t) else 1.0
+        return min(orbital_f, self.thermal_f[j])
+
+    def device_power(self, batch: int, f: float) -> float:
+        """Idle plus a saturating batch-dependent fraction of the DVFS dynamic power."""
+        power = self.cfg["power"]
+        if batch == 0:
+            return power["P_idle"]
+        thermal = self.cfg["thermal"]
+        utilization = 1 - (1 - thermal["busy_util_floor"]) * math.exp(-batch / thermal["batch_scale"])
+        return power["P_idle"] + (power["P_max"] - power["P_idle"]) * utilization * f**power["gamma"]
+
+    def _thermal_tick(self) -> None:
+        now = self.env.now
+        self.thermal.advance_with_power(now, self.thermal_power_w)
+        for j in self.tr.compute:
+            previous = self.f_of(j)
+            self.thermal_f[j] = self.thermal.clock_factor(j, now)
+            current = self.f_of(j)
+            if current != previous:
+                self.poke(j)
+            self.thermal_power_w[j] = self.device_power(len(self.nodes[j]), current)
 
     def kv_used(self, j: int) -> float:
         """Bytes committed on j: each resident request's KV at completion, plus inbound reservations."""
-        return sum(r.pin + r.pout for r in self.nodes[j]) * self.bpt + self.reserved[j]
+        return sum(r.reserved_tokens for r in self.nodes[j]) * self.bpt + self.reserved[j]
 
     def fits(self, j: int, r: CRequest) -> bool:
-        return self.kv_used(j) + (r.pin + r.pout) * self.bpt <= self.kv_cap
+        return self.kv_used(j) + r.reserved_tokens * self.bpt <= self.kv_cap
 
     def iter_of(self, j: int, extra: CRequest | None = None, f: float | None = None) -> float:
         rs = self.nodes[j]
@@ -139,6 +178,8 @@ class CoWorld:
     def _control(self):
         while True:
             yield self.env.timeout(self.period)
+            if self.thermal is not None:
+                self._thermal_tick()
             self.policy.rebalance(self)
 
     # -- request lifecycle -------------------------------------------------------------------
@@ -159,19 +200,20 @@ class CoWorld:
             if p is None:
                 yield self.env.timeout(self.period)
                 continue
-            need = (r.kv + r.remaining) * self.bpt
+            need = r.reserved_tokens * self.bpt
             self.reserved[j] += need
             r.state = "upload"
             f = self.net.add("up", p[0], p[1], r.upload_bytes, req=r.i)
             self.log("upload", req=r.i, path=p[0])
             yield f.done
-            self.reserved[j] -= need
             if f.failed:
+                self.reserved[j] -= need
                 r.upload_fail += 1
                 self.acc["upload_fail"] += 1
                 r.state = "wait"
                 continue
             yield self.env.timeout(self.hop_lat * len(p[1]))
+            self.reserved[j] -= need
             break
         r.node = j
         r.trail.append(j)
@@ -187,6 +229,7 @@ class CoWorld:
             it = self.iter_of(j)
             step = min(CHUNK_S, it * r.remaining)
             t0, g0 = self.env.now, r.gen
+            r.decode_step = (t0, it)
             try:
                 yield self.env.timeout(max(step, 1e-9))
             except simpy.Interrupt:
@@ -231,7 +274,7 @@ class CoWorld:
 
     def _migrate(self, r: CRequest, src: int, dst: int, p):
         r.migrating = True
-        need = (r.kv + r.remaining) * self.bpt
+        need = r.reserved_tokens * self.bpt
         self.reserved[dst] += need
         nbytes = r.kv * self.bpt
         f = self.net.add("mig", p[0], p[1], nbytes, req=r.i)
@@ -274,7 +317,10 @@ class CoWorld:
 
 
 def deadline_for(cfg: dict, t: float, pin: int, pout: int, long: bool) -> float:
-    """Arrival + factor × the request's decode time alone on a sunlit node."""
+    """Use a class deadline when configured, otherwise scale isolated decode time."""
+    fixed = cfg["slo"].get("long_deadline_s" if long else "short_deadline_s")
+    if fixed is not None:
+        return t + float(fixed)
     ideal = pout * iter_time(1, pin + pout / 2, 1.0, cfg["gpu"])
     k = float(cfg["slo"]["deadline_factor_long" if long else "deadline_factor_short"])
     return t + max(k * ideal, float(cfg["slo"]["min_deadline_s"]))
@@ -286,8 +332,16 @@ def make_requests(cfg: dict, trace: Trace, seed: int) -> list[CRequest]:
     rng = random.Random(seed)
     out: list[CRequest] = []
     window = float(wl["arrival_window_s"])
-    rate = float(wl["rate_per_rs_per_min"]) / 60.0
-    for o in trace.rs:
+    rates = wl.get("source_rates_per_min")
+    if rates is not None and len(rates) != len(trace.rs):
+        raise ValueError("source_rates_per_min must cover each remote-sensing satellite")
+    for source_index, o in enumerate(trace.rs):
+        rate = float(rates[source_index] if rates is not None else wl["rate_per_rs_per_min"]) / 60.0
+        if rate == 0:
+            continue
+        if rate < 0:
+            raise ValueError("arrival rate must be nonnegative")
+        source = []
         t = float(wl.get("start_s", 0.0))
         while True:
             t += rng.expovariate(rate)
@@ -298,11 +352,32 @@ def make_requests(cfg: dict, trace: Trace, seed: int) -> list[CRequest]:
             pout = rng.randint(int(lo), int(hi))
             pin = int(wl["long_pin" if long else "short_pin"])
             up = float(wl["long_upload_MB" if long else "short_upload_MB"]) * 1e6
-            out.append(CRequest(0, o, t, long, pin, pout, up, deadline_for(cfg, t, pin, pout, long)))
+            budget = hi if wl.get("reserve_output_budget") else None
+            source.append(CRequest(0, o, t, long, pin, pout, up, deadline_for(cfg, t, pin, pout, long),
+                                   output_budget=budget))
+        if burst := wl.get("release_burst"):
+            if source_index in burst.get("sources", range(len(trace.rs))):
+                _compress_releases(source, source_index, window, burst)
+        out.extend(source)
     out.sort(key=lambda r: (r.t, r.origin))
     for i, r in enumerate(out):
         r.i = i
     return out
+
+
+def _compress_releases(requests: list[CRequest], source_index: int, window: float, burst: dict) -> None:
+    """Compress each source's releases into its assigned window without changing its jobs."""
+    period = float(burst["period_s"])
+    duration = float(burst["duration_s"])
+    phase = source_index * float(burst["source_phase_s"])
+    if period <= 0 or duration <= 0 or phase < 0 or phase + duration > period:
+        raise ValueError("source release window must fit inside the period")
+    for r in requests:
+        block = math.floor(r.t / period) * period
+        scale = min(period, window - block) / period
+        release = block + (phase + (r.t - block) / period * duration) * scale
+        r.deadline += release - r.t
+        r.t = release
 
 
 def finite(x: float) -> float | None:

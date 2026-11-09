@@ -74,6 +74,7 @@ class Trace:
             self.epoch_edges.append(ids)
             self.epoch_comp.append(_components(self.n, [self.edges[i] for i in ids]))
         self._adj_cache: dict[int, list[list[tuple[int, int]]]] = {}
+        self._path_cache: dict[tuple[int, int, int, bool], tuple[list[int], list[int]] | None] = {}
 
         self._conn: dict[tuple[int, int], list[tuple[float, float]]] = {}
         self._conn_starts: dict[tuple[int, int], list[float]] = {}
@@ -136,6 +137,12 @@ class Trace:
 
     def path(self, s: int, d: int, t: float, *, via_rs: bool = False) -> tuple[list[int], list[int]] | None:
         """Fewest-hop path at t as (nodes, edge ids); RS satellites are endpoints, not relays."""
+        key = (self.epoch_index(t), s, d, via_rs)
+        if key not in self._path_cache:
+            self._path_cache[key] = self._find_path(s, d, t, via_rs)
+        return self._path_cache[key]
+
+    def _find_path(self, s: int, d: int, t: float, via_rs: bool) -> tuple[list[int], list[int]] | None:
         if s == d:
             return [s], []
         adj = self.adjacency(t)

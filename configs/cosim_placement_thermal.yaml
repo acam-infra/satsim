@@ -1,0 +1,57 @@
+name: cosim_placement_thermal
+title: Remote-sensing tile releases on a Walker compute constellation
+description: Paired smooth and buffered tile releases under the same orbit, workload and SLOs.
+trace: ../input/traces/coop-w53.trace.json
+scenario: ../input/traces/coop-w53.scenario.json
+delivery: final
+control_period_s: 2.0
+model: {layers: 32, kv_heads: 8, head_dim: 128, bytes_per_elem: 2}
+gpu:
+  kv_gib: 24.0
+  t_fixed_s: 0.003
+  t_weights_s: 0.01
+  t_kv_tok_s: 1.0e-7
+  t_seq_s: 5.0e-5
+  mem_freq_exp: 0.6
+power: {P_idle: 60, P_max: 300, gamma: 2.4, f_min: 0.35, P_dark: 80}
+thermal:
+  # Assumed sensitivity point, not an in-orbit calibration for a 300 W GPU.
+  tau_s: 240.0
+  R_th: 0.30
+  T_amb_C: 20.0
+  T0_C: 38.0
+  T_throttle_C: 84.0
+  T_release_C: 76.0
+  f_throttle: 0.55
+  P_busy: 300.0
+  busy_util_floor: 0.40
+  batch_scale: 4.0
+net:
+  link_gbps: {intra: 10.0, inter: 10.0, rs: 5.0}
+  hop_latency_s: 0.005
+migration: {timeout_s: 120.0, switch_s: 0.02}
+workload:
+  arrival_window_s: 3600
+  rate_per_rs_per_min: 12
+  p_long: 0.35
+  long_out: [18000, 36000]
+  short_out: [200, 1200]
+  long_pin: 4000
+  short_pin: 500
+  long_upload_MB: 500
+  short_upload_MB: 50
+  reserve_output_budget: true
+  release_burst: {period_s: 900, duration_s: 150, source_phase_s: 90}
+slo:
+  long_deadline_s: 900
+  short_deadline_s: 90
+  max_stall_frac: 0.1
+policy: {stall_weight: 1.0}
+policies:
+  round_robin: {policy: round_robin_all}
+  nearest: {policy: nearest}
+  least_loaded: {policy: least_reserved_kv}
+  greedy: {policy: greedy}
+  orbit_load: {policy: orbit_load, thermal_aware: false}
+  orbit_thermal: {policy: orbit_load}
+seeds: [1, 2, 3, 4, 5]

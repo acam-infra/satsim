@@ -20,8 +20,10 @@ The orbit is deterministic, so using the trace for prediction is legitimate: it 
 from __future__ import annotations
 
 import math
+from collections import Counter
 
 from satsim.cosim.trace import INF
+from satsim.method.engine.timing import iter_time
 
 MAX_INFLIGHT = 8
 MAX_MIG_PER_REQ = 2
@@ -110,6 +112,97 @@ class Ephemeris(Greedy):
             return None
         t = w.env.now
         return min(cs, key=lambda j: (predicted_cost(w, j, r, t, r.remaining, joining=True), j))
+
+
+class ReachableRoundRobin(Greedy):
+    def __init__(self):
+        self.next_index = 0
+
+    def place(self, w, r):
+        eligible = set(candidates(w, r))
+        if not eligible:
+            return None
+        for offset in range(len(w.tr.compute)):
+            index = (self.next_index + offset) % len(w.tr.compute)
+            node = w.tr.compute[index]
+            if node in eligible:
+                self.next_index = (index + 1) % len(w.tr.compute)
+                return node
+
+
+class LeastReservedKV(Greedy):
+    def place(self, w, r):
+        return min(candidates(w, r), key=lambda j: (w.kv_used(j), j), default=None)
+
+
+def upload_options(w, r):
+    """Currently feasible nodes and their upload ETA under a snapshot of link sharing."""
+    now = w.env.now
+    users = Counter(e for flow in w.net.flows for _, _, e in flow.hops)
+    for j in candidates(w, r):
+        path = w.tr.path(r.origin, j, now)
+        if path is None:
+            continue
+        edges = path[1]
+        bw = min(w.net.cap[e] / (users[e] + 1) for e in edges)
+        duration = r.upload_bytes / bw + w.hop_lat * len(edges)
+        if path_lifetime(w, path) >= now + duration:
+            yield j, duration
+
+
+class Nearest(Greedy):
+    def place(self, w, r):
+        best = min(upload_options(w, r), key=lambda x: (x[1], x[0]), default=None)
+        return best[0] if best else None
+
+
+def thermal_service_clock(w, j, batch, tokens, context):
+    """Estimate the lit decode clock over a batch's service interval from its heat budget."""
+    thermal = w.thermal
+    if thermal is None or w.thermal_f[j] < 1:
+        return w.thermal_f[j]
+    power = w.device_power(batch, 1.0)
+    equilibrium = thermal.T_amb_C + thermal.R_th * power
+    if equilibrium <= thermal.T_throttle_C:
+        return 1.0
+    temp = min(thermal.temperature(j), thermal.T_throttle_C)
+    time_to_hot = thermal.tau_s * math.log((equilibrium - temp) / (equilibrium - thermal.T_throttle_C))
+    full_speed_time = tokens * iter_time(batch, context, 1.0, w.gpu)
+    if full_speed_time <= time_to_hot:
+        return 1.0
+    idle = w.cfg["power"]["P_idle"]
+    sustainable_w = (thermal.T_throttle_C - thermal.T_amb_C) / thermal.R_th
+    ratio = max(0.0, (sustainable_w - idle) / (power - idle))
+    sustainable_f = max(thermal.f_throttle, ratio ** (1 / thermal.gamma))
+    slowed = (full_speed_time - time_to_hot) / sustainable_f
+    return full_speed_time / (time_to_hot + slowed)
+
+
+class OrbitLoad(Greedy):
+    """One-shot placement with upload, an output-length prior, and a load/heat forecast."""
+
+    def __init__(self, thermal_aware: bool = True):
+        self.thermal_aware = thermal_aware
+
+    def place(self, w, r):
+        bounds = w.cfg["workload"]["long_out" if r.long else "short_out"]
+        tokens = sum(bounds) / len(bounds)
+        best = min(upload_options(w, r), key=lambda x: (self._delivery(w, r, tokens, *x), x[1], x[0]),
+                   default=None)
+        return best[0] if best else None
+
+    def _delivery(self, w, r, tokens, j, upload_s):
+        batch = len(w.nodes[j]) + 1 + int(w.reserved[j] > 0)
+        context = sum(x.kv for x in w.nodes[j]) + r.pin + tokens / 2 + w.reserved[j] / w.bpt / 2
+        start = w.env.now + upload_s
+        clock = thermal_service_clock(w, j, batch, tokens, context) if self.thermal_aware else 1.0
+        for a, b, dark in w.tr.power_segments(j, start):
+            f = min(clock, w.f_dark) if dark else clock
+            step = iter_time(batch, context, f, w.gpu)
+            if tokens * step <= b - a:
+                return w.tr.next_conn(r.origin, j, a + tokens * step)
+            tokens -= (b - a) / step
+        return INF
 
 
 class Reactive(Greedy):
@@ -279,10 +372,16 @@ class RoundRobin(Greedy):
 def make_policy(spec: dict):
     kind = spec["policy"]
     kw = {k: v for k, v in spec.items() if k != "policy"}
+    if kind == "thermal_rebalance":
+        from satsim.cosim.thermal_rebalance import ThermalRebalance
+
+        return ThermalRebalance(**kw)
     table = {"greedy": Greedy, "ephemeris": Ephemeris, "reactive": Reactive, "contact_aware": ContactAware,
              "round_robin": RoundRobin,
              "random": lambda **_kw: RoundRobin(mode="random"),
-             "least_loaded": lambda **_kw: RoundRobin(mode="least_loaded")}
+             "least_loaded": lambda **_kw: RoundRobin(mode="least_loaded"),
+             "round_robin_all": ReachableRoundRobin, "least_reserved_kv": LeastReservedKV,
+             "nearest": Nearest, "orbit_load": OrbitLoad}
     if kind not in table:
         raise ValueError(f"unknown cosim policy {kind!r}; one of {sorted(table)}")
     return table[kind](**kw)

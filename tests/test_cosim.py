@@ -145,3 +145,56 @@ def test_runs_are_deterministic(tmp_path):
     a, ra = _one_long_request("contact_aware")
     b, rb = _one_long_request("contact_aware")
     assert (ra.t_delivered, ra.trail) == (rb.t_delivered, rb.trail)
+
+
+def test_placement_baseline_variants_keep_their_distinct_behavior():
+    env = simpy.Environment(initial_time=120)
+    world = CoWorld(env, toy_trace(), CFG, make_policy({"policy": "greedy"}))
+    request = CRequest(0, 0, 120, False, 500, 1000, 1e6, 210)
+    assert make_policy({"policy": "round_robin"}).place(world, request) == 2
+    assert make_policy({"policy": "round_robin_all"}).place(world, request) == 1
+
+    world.nodes[1].append(CRequest(1, 0, 0, True, 4000, 20000, 1e6, 900))
+    world.nodes[2].extend(CRequest(i, 0, 0, False, 500, 1000, 1e6, 90) for i in (2, 3))
+    assert make_policy({"policy": "least_loaded"}).place(world, request) == 1
+    assert make_policy({"policy": "least_reserved_kv"}).place(world, request) == 2
+
+
+def test_buffered_release_preserves_each_job_and_deadline_budget():
+    from satsim.cosim.world import make_requests
+
+    cfg = copy.deepcopy(CFG)
+    cfg["workload"].update(rate_per_rs_per_min=8, p_long=0.5, long_out=[2000, 4000], short_out=[100, 200],
+                           long_pin=400, short_pin=50, long_upload_MB=100, short_upload_MB=10,
+                           reserve_output_budget=True)
+    tr = toy_trace()
+    smooth = make_requests(cfg, tr, 5)
+    cfg["workload"]["release_burst"] = {"period_s": 200, "duration_s": 40, "source_phase_s": 0}
+    buffered = make_requests(cfg, tr, 5)
+    assert smooth and len(smooth) == len(buffered)
+    for a, b in zip(smooth, buffered):
+        assert (a.origin, a.pin, a.pout, a.upload_bytes) == (b.origin, b.pin, b.pout, b.upload_bytes)
+        assert b.t % 200 < 40
+        assert b.deadline - b.t == pytest.approx(a.deadline - a.t)
+        assert b.reserved_tokens == b.pin + (4000 if b.long else 200)
+
+
+def test_sampled_thermal_feedback_slows_decode_without_umbra_power_cap():
+    cfg = copy.deepcopy(CFG)
+    cfg["power"]["P_dark"] = cfg["power"]["P_max"]
+    thermal = dict(tau_s=8.0, R_th=0.50, T_amb_C=20.0, T0_C=50.0, T_throttle_C=84.0,
+                   T_release_C=76.0, f_throttle=0.55, P_busy=300.0, busy_util_floor=0.40, batch_scale=4.0)
+    completion = []
+    for use_heat in (False, True):
+        if use_heat:
+            cfg["thermal"] = thermal
+        env = simpy.Environment()
+        w = CoWorld(env, toy_trace(), cfg, make_policy({"policy": "greedy"}))
+        r = CRequest(0, 0, 0, True, 1000, 12000, 0, 300)
+        w.submit(r)
+        env.run(until=300)
+        completion.append(r.t_delivered)
+        assert r.trail == [1]
+        if use_heat:
+            assert w.thermal.diagnostics()["throttle_time_s"][1] > 0
+    assert completion[1] > completion[0]

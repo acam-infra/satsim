@@ -65,14 +65,14 @@ class DynamicThermal:
             self._sync_f()
         return changed
 
-    def _step(self, dt: float) -> bool:
+    def _step(self, dt: float, power_w: Sequence[float] | None = None) -> bool:
         if dt <= 0:
             return False
         # 用步进前的节流态算功率，再积分温度，最后刷新滞回
         for j in range(self.n):
             if self._throttled[j]:
                 self._throttle_time_s[j] += dt
-            p = self._power(j)
+            p = self._power(j) if power_w is None else power_w[j]
             t_eq = self.T_amb_C + self.R_th * p
             decay = math.exp(-dt / self.tau_s)
             self._T[j] = t_eq + (self._T[j] - t_eq) * decay
@@ -87,6 +87,14 @@ class DynamicThermal:
         dt = float(t) - self._t
         self._t = float(t)
         return self._step(dt)
+
+    def advance_with_power(self, t: float, power_w: Sequence[float]) -> bool:
+        """Integrate explicitly sampled power for the interval ending at t."""
+        if len(power_w) != self.n or t < self._t:
+            raise ValueError("thermal power samples must cover every node and advance in time")
+        dt = t - self._t
+        self._t = t
+        return self._step(dt, power_w)
 
     def clock_factor(self, node: int, t: float) -> float:
         # 控制周期之间懒推进一步（载荷沿用上次 advance）
