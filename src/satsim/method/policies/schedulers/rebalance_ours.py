@@ -200,7 +200,7 @@ class RebalanceOursScheduler:
     """占星间带宽时的计算-通信净转化值调度器（CCE-Net）。"""
 
     id = "rebalance_ours"
-    TODO = "CCE-Net: 计算-通信净转化值打分策略"
+    TODO = ""
 
     def __init__(self, theta: dict | None = None):
         self.scorer = CCEScorer(theta)

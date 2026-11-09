@@ -61,7 +61,8 @@ def test_benefit_and_link_cost():
     assert c2["rebalance_link_abort_mean"] > 0
     # 无背景时随机占带宽迁移仍可能慢于 free，但超时中断应减少
     assert c2["nobg"]["rebalance_link_abort_mean"] < c2["rebalance_link_abort_mean"]
-    assert payload["claims"]["ours"]["status"] == "todo"
+    # rebalance_ours (CCE-Net) 已实现并在主实验中运行：达标吞吐追平 free 上界且 0 超时中断
+    assert payload["claims"]["ours"]["status"] == "implemented"
     ours_pol = payload["claims"]["policies"]["rebalance_ours"]
     rand_pol = payload["claims"]["policies"]["rebalance_random"]
     assert ours_pol["goodput_tok_s_mean"] > rand_pol["goodput_tok_s_mean"]

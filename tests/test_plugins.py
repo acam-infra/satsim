@@ -42,6 +42,7 @@ def test_configs_symlink_runs():
 
 
 def test_bundle_costly_random_and_ours_todo():
+    # rebalance_ours (CCE-Net) 已不再是占位实现：确认它被正确装配为占带宽 (full) 迁移策略
     _, _, jobs = resolve_spec(MAIN)
     by_name = {j[0]: j[1] for j in jobs}
     b_rand = bundle_from_policy(by_name["rebalance_random"])
@@ -49,7 +50,8 @@ def test_bundle_costly_random_and_ours_todo():
     assert b_rand.link_cost.mode == "full"
     b_ours = bundle_from_policy(by_name["rebalance_ours"])
     assert b_ours.scheduler.id == "rebalance_ours"
-    assert getattr(b_ours.scheduler, "TODO", "")
+    assert b_ours.link_cost.mode == "full"
+    assert not getattr(b_ours.scheduler, "TODO", "")
 
 
 def test_poisson_generate_and_run():
