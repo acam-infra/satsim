@@ -1,0 +1,62 @@
+# LAB-1765 S1: 第一次分析 — 地面常见初次分配算法的端到端验证。
+# 场景与 cosim_typhoon_agentic_v1 完全一致，只换 policies:
+# round_robin / random / least_loaded = 地面常见首放（不看未来），
+# greedy = 当前最快星首放（不看未来但感知负载），
+# ephemeris = 星历全信息首放, contact_aware = 星历首放 + 净收益迁移。
+# 问题：常见首放是否端到端暴露「分配局部性 + 长会话过热降吞吐」(P99 / good_long)。
+name: exp_first_placement_v1
+title: "S1 · 常见初次分配算法端到端验证（台风 agentic 场景）"
+description: >-
+  同 cosim_typhoon_agentic_v1：3 颗遥感星 × 12 req/min，一半长时 agentic 会话（2-4 万 token），
+  Walker 53° 4×10 算力星座，地影限功 0.35×。只替换首放策略，全部不迁移（除 contact_aware 对照）。
+trace: ../input/traces/coop-w53.trace.json
+scenario: ../input/traces/coop-w53.scenario.json
+delivery: final
+control_period_s: 2.0
+frame_s: 10.0
+model: {layers: 32, kv_heads: 8, head_dim: 128, bytes_per_elem: 2}
+gpu:
+  kv_gib: 24.0
+  t_fixed_s: 0.003
+  t_weights_s: 0.01
+  t_kv_tok_s: 1.0e-7
+  t_seq_s: 5.0e-5
+  mem_freq_exp: 0.6
+power:
+  P_idle: 60
+  P_max: 300
+  gamma: 2.4
+  f_min: 0.35
+  P_dark: 80
+net:
+  link_gbps: {intra: 10.0, inter: 10.0, rs: 5.0}
+  hop_latency_s: 0.005
+migration:
+  timeout_s: 120.0
+  switch_s: 0.02
+workload:
+  arrival_window_s: 5400
+  rate_per_rs_per_min: 12
+  p_long: 0.5
+  long_out: [20000, 40000]
+  short_out: [200, 1200]
+  long_pin: 4000
+  short_pin: 500
+  long_upload_MB: 500
+  short_upload_MB: 50
+slo:
+  deadline_factor_long: 2.0
+  deadline_factor_short: 4.0
+  min_deadline_s: 120
+  max_stall_frac: 0.1
+policy:
+  stall_weight: 1.0
+policies:
+  round_robin: {policy: round_robin}
+  random: {policy: random}
+  least_loaded: {policy: least_loaded}
+  greedy: {policy: greedy}
+  ephemeris: {policy: ephemeris}
+  contact_aware: {policy: contact_aware}
+seeds: [1, 2, 3]
+record_seed: 1

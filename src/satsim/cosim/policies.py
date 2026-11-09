@@ -243,13 +243,46 @@ class ContactAware(Ephemeris):
         return stay > end_alone + 30.0
 
 
+class RoundRobin(Greedy):
+    """Ground-style naive first placement: no orbit/load-future awareness.
+
+    ``place`` skips nodes currently in the umbra or KV-full, then hands requests
+    out round-robin over the reachable nodes in arrival order. Variants:
+    ``random`` = uniform over nodes that fit; ``least_loaded`` = fewest residents
+    right now. None of them look at the future, so whatever locality / thermal
+    residual they leave is what migration must pay for.
+    """
+
+    id = "round_robin"
+
+    def __init__(self, mode: str = "rr"):
+        self.mode = mode
+        self._rr = 0
+
+    def place(self, w, r):
+        cs = candidates(w, r)
+        if not cs:
+            return None
+        if self.mode == "random":
+            return w.rng.choice(cs)
+        if self.mode == "least_loaded":
+            return min(cs, key=lambda j: (len(w.nodes[j]), j))
+        lit = [j for j in cs if not w.tr.is_dark(j, w.env.now)]
+        pool = lit or cs
+        self._rr += 1
+        return pool[self._rr % len(pool)]
+
+    def rebalance(self, w) -> None:
+        return
+
+
 def make_policy(spec: dict):
     kind = spec["policy"]
     kw = {k: v for k, v in spec.items() if k != "policy"}
-    table = {"greedy": Greedy, "ephemeris": Ephemeris, "reactive": Reactive, "contact_aware": ContactAware}
+    table = {"greedy": Greedy, "ephemeris": Ephemeris, "reactive": Reactive, "contact_aware": ContactAware,
+             "round_robin": RoundRobin,
+             "random": lambda **_kw: RoundRobin(mode="random"),
+             "least_loaded": lambda **_kw: RoundRobin(mode="least_loaded")}
     if kind not in table:
         raise ValueError(f"unknown cosim policy {kind!r}; one of {sorted(table)}")
     return table[kind](**kw)
-
-
-__all__ = ["make_policy", "predicted_cost", "predict_decode_end", "candidates", "math"]
