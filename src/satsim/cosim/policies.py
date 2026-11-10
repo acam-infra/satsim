@@ -376,6 +376,10 @@ def make_policy(spec: dict):
         from satsim.cosim.thermal_rebalance import ThermalRebalance
 
         return ThermalRebalance(**kw)
+    if kind in ("torch_rebalance", "torch_lp"):
+        from satsim.cosim.thermal_rebalance import TorchRebalance
+
+        return TorchRebalance(**kw)
     table = {"greedy": Greedy, "ephemeris": Ephemeris, "reactive": Reactive, "contact_aware": ContactAware,
              "round_robin": RoundRobin,
              "random": lambda **_kw: RoundRobin(mode="random"),

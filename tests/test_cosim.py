@@ -198,3 +198,45 @@ def test_sampled_thermal_feedback_slows_decode_without_umbra_power_cap():
         if use_heat:
             assert w.thermal.diagnostics()["throttle_time_s"][1] > 0
     assert completion[1] > completion[0]
+
+
+def test_torch_rebalance_migrates_out_of_umbra_and_supports_agentic_tether():
+    cfg = copy.deepcopy(CFG)
+    cfg["workload"].update(
+        long_out=[8000, 16000],
+        short_out=[200, 1000],
+        long_pin=2000,
+        short_pin=500,
+    )
+    cfg["thermal"] = dict(
+        tau_s=60.0, R_th=0.30, T_amb_C=20.0, T0_C=38.0, T_throttle_C=84.0,
+        T_release_C=76.0, f_throttle=0.55, P_busy=300.0, busy_util_floor=0.40, batch_scale=4.0,
+    )
+    tr = toy_trace()
+    env = simpy.Environment()
+    pol = make_policy({"policy": "torch_rebalance", "placement": {"policy": "greedy"}})
+    w = CoWorld(env, tr, cfg, pol)
+    r = CRequest(
+        0, 0, 30.0, True, 2000, 12000, 20e6, 550.0,
+        output_budget=16000, task_class="pinpoint_deep",
+    )
+    w.submit(r)
+    env.run(until=tr.horizon)
+    assert r.trail == [1, 2]
+    assert w.good(r)
+
+    # Verify agentic raw-image tether pull accounting when migrated away from anchor_node
+    env2 = simpy.Environment()
+    pol2 = make_policy({"policy": "reactive"})
+    w2 = CoWorld(env2, tr, cfg, pol2)
+    r2 = CRequest(
+        0, 0, 30.0, True, 2000, 8000, 20e6, 900.0,
+        output_budget=16000, task_class="scan_high_reaccess",
+        reaccess_total=3, reaccess_tile_bytes=10e6,
+    )
+    w2.submit(r2)
+    env2.run(until=tr.horizon)
+    assert r2.anchor_node == 1
+    assert r2.node == 2
+    assert r2.reaccess_done == 3
+    assert r2.tether_bytes > 0 and r2.tether_s > 0

@@ -20,7 +20,7 @@ PROFILES = {
     "regional120": (120, 0, 2),
 }
 BASELINES = ("round_robin", "nearest", "least_loaded", "greedy", "orbit_load", "orbit_thermal")
-RUNTIME = ("speed", "deadline_rc")
+RUNTIME = ("speed", "deadline_rc", "torch_lp")
 
 
 def profile_config(cfg, rate, profile, seed):
@@ -67,6 +67,7 @@ def main():
         speed={"policy": "thermal_rebalance", "placement": placement,
                "deadline_aware": False, "externality": False},
         deadline_rc={"policy": "thermal_rebalance", "placement": placement, "thermal_aware": "rc"},
+        torch_lp={"policy": "torch_rebalance", "placement": placement},
     )
     if args.stage == "pilot":
         seeds = (1,)

@@ -57,6 +57,17 @@ class CRequest:
     trail: list = field(default_factory=list)  # nodes visited
     output_budget: int | None = None  # declared cap, when provided by the workload
     decode_step: tuple[float, float] | None = None  # start time and seconds per token
+    task_class: str = "standard"  # standard | scan_high_reaccess | pinpoint_deep | phase_transition
+    anchor_node: int = -1  # initial compute node holding the raw source image (data anchor)
+    reaccess_total: int = 0  # total mid-decode raw-image tile re-access pulls required
+    reaccess_done: int = 0  # completed raw-image tile pulls
+    reaccess_tile_bytes: float = 0.0  # bytes per raw-image tile pull from anchor_node
+    tether_s: float = 0.0  # cumulative seconds spent fetching raw-image tiles across ISLs
+    tether_bytes: float = 0.0  # cumulative bytes fetched from anchor_node across ISLs
+
+    @property
+    def reaccess_remaining(self) -> int:
+        return max(0, self.reaccess_total - self.reaccess_done)
 
     @property
     def reserved_tokens(self) -> int:
@@ -152,7 +163,7 @@ class CoWorld:
 
     def poke(self, j: int) -> None:
         for r in list(self.nodes[j]):
-            if r.state == "decode" and r.proc is not None and r.proc.is_alive:
+            if r.state == "decode" and r.decode_step is not None and r.proc is not None and r.proc.is_alive:
                 try:
                     r.proc.interrupt()
                 except RuntimeError:
@@ -216,6 +227,8 @@ class CoWorld:
             self.reserved[j] -= need
             break
         r.node = j
+        if r.anchor_node < 0:
+            r.anchor_node = j
         r.trail.append(j)
         r.t_admit = self.env.now
         r.state = "decode"
@@ -227,13 +240,18 @@ class CoWorld:
             j = r.node
             dark = self.tr.is_dark(j, self.env.now)
             it = self.iter_of(j)
-            step = min(CHUNK_S, it * r.remaining)
+            rem_to_next_pull = r.remaining
+            if r.reaccess_total > 0 and r.reaccess_done < r.reaccess_total:
+                next_pull_tok = (r.reaccess_done + 1) * (r.pout / (r.reaccess_total + 1))
+                rem_to_next_pull = max(1.0, next_pull_tok - r.gen)
+            step = min(CHUNK_S, it * min(r.remaining, rem_to_next_pull))
             t0, g0 = self.env.now, r.gen
             r.decode_step = (t0, it)
             try:
                 yield self.env.timeout(max(step, 1e-9))
             except simpy.Interrupt:
                 pass
+            r.decode_step = None
             dt = self.env.now - t0
             got = min(r.remaining, dt / it) if it > 0 else 0.0
             r.gen = g0 + got
@@ -243,6 +261,37 @@ class CoWorld:
                 r.stall_s += self.tr.disconnected_time(r.origin, j, t0, self.env.now)
             if r.t_first is None and r.gen >= 1:
                 r.t_first = self.env.now
+            # Agentic raw-image data-anchor re-access: when reaching a tool-call milestone,
+            # if migrated away from anchor_node, pull the high-res image tile across ISLs.
+            if r.reaccess_total > 0 and r.reaccess_done < r.reaccess_total:
+                next_pull_tok = (r.reaccess_done + 1) * (r.pout / (r.reaccess_total + 1))
+                if r.gen + 1e-6 >= next_pull_tok:
+                    r.reaccess_done += 1
+                    # Phase-transition tasks (Type 3) finish wide-area scanning midway and enter pure reasoning
+                    if r.task_class == "phase_transition" and r.reaccess_done >= max(1, r.reaccess_total // 2):
+                        r.reaccess_done = r.reaccess_total
+                    if r.node != r.anchor_node and r.reaccess_tile_bytes > 0:
+                        t_pull0 = self.env.now
+                        p_pull = self.tr.path(r.anchor_node, r.node, self.env.now)
+                        if p_pull is not None and p_pull[1]:
+                            f_pull = self.net.add("tether", p_pull[0], p_pull[1], r.reaccess_tile_bytes, req=r.i)
+                            while not f_pull.done.triggered and self.env.now - t_pull0 < self.mig_timeout:
+                                try:
+                                    yield f_pull.done | self.env.timeout(
+                                        max(1e-6, self.mig_timeout - (self.env.now - t_pull0))
+                                    )
+                                except simpy.Interrupt:
+                                    pass
+                            if not f_pull.done.triggered:
+                                self.net.cancel(f_pull)
+                            else:
+                                try:
+                                    yield self.env.timeout(self.hop_lat * len(p_pull[1]))
+                                except simpy.Interrupt:
+                                    pass
+                            r.tether_bytes += r.reaccess_tile_bytes
+                            self.acc["tether_bytes"] = self.acc.get("tether_bytes", 0.0) + r.reaccess_tile_bytes
+                        r.tether_s += self.env.now - t_pull0
         r.state = "deliver"
         r.t_decoded = self.env.now
         j = r.node
@@ -263,10 +312,10 @@ class CoWorld:
         self.log("deliver", req=r.i, node=j, o=r.origin, path=p[0] if p else [j, r.origin])
 
     # -- migration ---------------------------------------------------------------------------
-    def migrate(self, r: CRequest, dst: int) -> bool:
+    def migrate(self, r: CRequest, dst: int, path: tuple[list[int], list[int]] | None = None) -> bool:
         if r.migrating or r.state != "decode" or dst == r.node:
             return False
-        p = self.tr.path(r.node, dst, self.env.now)
+        p = path if path is not None else self.tr.path(r.node, dst, self.env.now)
         if p is None or not self.fits(dst, r):
             return False
         self.env.process(self._migrate(r, r.node, dst, p))
@@ -360,8 +409,27 @@ def make_requests(cfg: dict, trace: Trace, seed: int) -> list[CRequest]:
                 _compress_releases(source, source_index, window, burst)
         out.extend(source)
     out.sort(key=lambda r: (r.t, r.origin))
+    agentic_cfg = wl.get("agentic_classes")
+    rng_cls = random.Random(seed ^ 0xA6E4) if agentic_cfg else None
     for i, r in enumerate(out):
         r.i = i
+        if agentic_cfg and r.long and rng_cls is not None:
+            u = rng_cls.random()
+            p_scan = float(agentic_cfg.get("p_scan", 0.35))
+            p_pinpoint = float(agentic_cfg.get("p_pinpoint", 0.40))
+            tile_mb = float(agentic_cfg.get("tile_MB", 125.0))
+            if u < p_scan:
+                r.task_class = "scan_high_reaccess"
+                r.reaccess_total = int(agentic_cfg.get("scan_pulls", 5))
+                r.reaccess_tile_bytes = tile_mb * 1e6
+            elif u < p_scan + p_pinpoint:
+                r.task_class = "pinpoint_deep"
+                r.reaccess_total = int(agentic_cfg.get("pinpoint_pulls", 0))
+                r.reaccess_tile_bytes = 0.0
+            else:
+                r.task_class = "phase_transition"
+                r.reaccess_total = int(agentic_cfg.get("phase_pulls", 4))
+                r.reaccess_tile_bytes = tile_mb * 1e6
     return out
 
 
