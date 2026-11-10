@@ -1,21 +1,25 @@
 # satsim
 
-## 目录结构（Layout）
+## 目录结构与双层架构（Layout）
 
-- `input/`：实验场景配置（`scenarios/`）、物理背景说明（`scenes/`）与请求流生成器（`generate/`）。
-- `src/satsim/method/`：SimPy 仿真引擎、全局调度器（`Scheduler`）与链路传输开销模型（`link_cost`）。
+- `input/`：实验场景配置（`scenarios/`）、物理背景说明（`scenes/`）、星历接触迹线（`traces/`）与请求流生成器（`generate/`）。
+- `src/satsim/method/`：**[L1 机理验证层]** SimPy 离散事件仿真引擎、全局调度器（`Scheduler`）、链路传输开销模型（`link_cost`）与可插拔温控（`thermal`）。
+  - 论文三档调度策略：`place_once`（首次分配）｜`rebalance_free`（无消耗迁移）｜`rebalance_random`（随机迁移）/ `rebalance_ours`（自研迁移 **CCE-Net**，已实现）。
+  - 温控与降频模式：`thermal.mode` 支持 `explicit`（定时限功）与 `dynamic`（一阶 RC 动态温控，见 ADR 0004）。
+- `src/satsim/cosim/`：**[L2 真实星座层]** OrbitSim 接触迹线联合仿真引擎、**TORCH (`TorchRebalance` / `torch_lp`)** 无旋钮多跳热-轨流重平衡与 Agentic 数据锚点牵引（`thermal_rebalance.py`）。
 - `src/satsim/output/`：结论 C1 / C2 指标统计与汇总输出。
-- 论文三档调度策略：`place_once`（首次分配）｜`rebalance_free`（无消耗迁移）｜`rebalance_random`（随机迁移）/ `rebalance_ours`（自研迁移，TODO）。
-- 插件与接口规格：`docs/SPEC_PLUGIN_FRAMEWORK.md`。
-- 温控与降频模式：`thermal.mode` 支持 `explicit`（定时限功）与 `dynamic`（动态温控，见 ADR 0004）。
-- 实验结果主表：`README.md`。
-- 自研迁移的并行思路：`docs/ideas/`，每条思路一个文件、一个分支、一个调度器文件，隔离规则见 `docs/ideas/README.md`。
+- 文档层次总导航：`docs/README.md`
+  - L1 论文核心报告：`docs/TORCH_PAPER_REPORT.md`（CoSim + TORCH）与根目录 `README.md`（SimPy C1/C2 主表）。
+  - L2 插件与架构决策：`docs/SPEC_PLUGIN_FRAMEWORK.md` 与 `docs/adr/`（0001 ~ 0005）。
+  - L3 专题实验笔记：`docs/notes/`。
+  - L4 并行探索看板：`docs/ideas/README.md`（含已合入的 `M5` 轨道突发热点刻画与传算重叠微测）。
 
-配置文件命名规范：
+配置文件命名规范（详见 `configs/README.md`）：
 - `base_*`：基础环境模板（定义硬件、拓扑、温控参数，不可直接运行）
-- `exp_*`：可运行实验（在 `configs/exp_*.yaml` 下有同名软链入口）
+- `exp_*`：L1 SimPy 可运行实验（在 `configs/exp_*.yaml` 下有同名软链入口）
+- `cosim_*`：L2 OrbitSim 轨迹协同仿真实验（位于 `configs/cosim_*.yaml`）
 - `scene_*`：场景背景说明（位于 `input/scenes/`，解释物理背景，不可直接运行）
-- 文件名（去后缀）必须与 YAML 顶层 `name:` 字段完全一致。
+- `base_*` / `exp_*` / `scene_*` 文件名（去后缀）必须与 YAML 顶层 `name:` 字段完全一致。
 
 ## 术语与架构决策（Language）
 
