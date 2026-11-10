@@ -1,7 +1,7 @@
 # satsim
 
 低轨卫星组的在线推理与跨星迁移仿真器（基于 SimPy）。对比论文三档调度策略：
-**首次分配（`place_once`）**｜**无消耗迁移（`rebalance_free`）**｜**占带宽迁移（随机基线 `rebalance_random` + 自研策略 `rebalance_ours` 待实现）**。
+**首次分配（`place_once`）**｜**无消耗迁移（`rebalance_free`）**｜**占带宽迁移（随机基线 `rebalance_random` + 自研策略 `rebalance_ours` / `CCE-Net`）**。
 
 ```bash
 uv sync
@@ -15,21 +15,29 @@ uv sync
 .venv/bin/pytest
 ```
 
-## 协同仿真 (orbitsim 轨迹驱动)
+## 协同仿真与多轨任务分配 (`satsim.cosim`)
 
-读取 orbitsim 导出的星间接触与地影轨迹（`input/traces/*.json`），在真实时变拓扑上对比四档在线推理调度策略，并可导出 3-D 回放数据供 `orbitsim/viz/play.html` 播放：
+支持读取 orbitsim 导出的星间接触与地影轨迹（`input/traces/*.json`），或通过 `satsim.cosim.synth.synth_multi_sso()` **在内存即时合成多轨道面异构 SSO 星座**（如 `LTAN 10:30/13:30` 成像伴随影轨 + `LTAN 06:00` 晨昏全亮轨），将调度解耦为正交的 **任务分配器（`Placer`）$\times$ 运行中迁移器（`Migrator`）**：
 
 ```bash
+# 1. 前置问题确认（Motivation）：多轨道面异构 SSO 下传统分配算法 (nearest/rr/random) 的计算负载错配诊断
+uv run python scripts/exp_motivation_multi_sso.py --seeds 1,2,3 --rate 10 --sweep-rates 6,8,10,12
+
+# 2. 时变轨迹协同仿真并导出 3-D 回放 JSON
 uv run satsim-cosim configs/cosim_coop_w53_v1.yaml --viz ../orbitsim/viz/public/playback
 uv run satsim-cosim configs/cosim_typhoon_agentic_v1.yaml --viz ../orbitsim/viz/public/playback  # 台风应急 · 长时会话
 ```
 
-| 策略 | 放置与迁移机制 |
+| 策略 (`policy` / `place`) | 分配与迁移机制（术语见 `GLOSSARY.md`） |
 |---|---|
-| `greedy` | **贪心放置（不迁移）**：新请求发往当前预计最快完成的连通算力星，不看未来地影与断链 |
-| `reactive` | **反应式迁移（进影就搬）**：贪心放置；算力星一旦进入地影，立即将请求迁移到当前最快的亮星 |
-| `ephemeris` | **星历放置（不迁移）**：利用已知星历预测整段解码与回传耗时来放置请求，运行中不迁移 |
-| `contact_aware` | **星历放置 + 接触感知迁移**：星历放置；按"迁移者提前量 + 源星变快 − 目标星变慢"的净收益决定是否迁移，每颗目标星每周期只接一个（`externality: false` 为只算自己的 v1） |
+| `nearest` | **就近分配（不迁移）**：按遥感星到算力星的最短星间链路跳数卸载（同跳数轮询），易造成成像同面影轨拥塞而晨昏亮轨闲置 |
+| `rr` | **轮询分配（不迁移）**：在可达算力星间循环轮询分配，不感知队列负载与地影降频（引发暗星 Little's Law 队列积压） |
+| `random` | **随机分配（不迁移）**：在可达算力星间均匀随机分配，不感知队列负载与地影降频 |
+| `least_loaded` (`jsq`) | **最短队列分配（不迁移）**：选当前并发请求数最少的算力星，感知队列长度但不感知地影降频（$0.35\times$） |
+| `greedy` | **贪心分配（不迁移）**：新请求发往当前单步耗时（`iter_of`）最快的连通算力星，感知当前明暗与队列，不看未来星历 |
+| `reactive` | **反应式迁移（进影就搬）**：贪心分配；算力星一旦进入地影，立即将请求迁移到当前最快的亮星 |
+| `ephemeris` | **星历分配（不迁移）**：利用已知星历预测整段解码与回传耗时来放置请求，运行中不迁移 |
+| `contact_aware` | **接触感知迁移**：星历分配；按"迁移者提前量 + 源星变快 − 目标星变慢"的节点对净收益决定是否迁移，每颗目标星每周期只接一个（`externality: false` 为只算自己的 v1） |
 
 实验结果与结论见 [`docs/notes/cosim_contact_trace.md`](docs/notes/cosim_contact_trace.md)，引擎设计见 [`docs/adr/0005-cosim-contact-trace.md`](docs/adr/0005-cosim-contact-trace.md)。
 
