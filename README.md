@@ -114,6 +114,16 @@ uv run satsim-cosim configs/cosim_typhoon_agentic_v1.yaml --viz ../orbitsim/viz/
 3. 静态轨道拓扑说明：`docs/adr/0003-orbit-planes-topology-snapshot.md`
 4. 策略与温控插件规格：`docs/SPEC_PLUGIN_FRAMEWORK.md`
 5. 可运行实验入口说明：`configs/README.md`
-6. 自研迁移的并行思路看板：`docs/ideas/README.md`
+6. 自研迁移的并行思路看板：`docs/ideas/README.md`（含 M5 轨道突发热点刻画与传算重叠微测 `docs/ideas/M5_traffic_compute_overlap.md`）
+7. TORCH 多跳热-轨与数据锚点流重平衡论文报告：`docs/TORCH_PAPER_REPORT.md`
 
-代码目录：输入与场景生成在 `input/`（命令行入口在 `configs/exp_*.yaml`）；仿真引擎与调度策略在 `src/satsim/method/`；指标汇总与结论检验在 `src/satsim/output/`。
+## 分支说明（Branches）
+
+| 分支 | 状态 | 功能与科研定位说明 |
+|---|---|---|
+| `main` | **主线（活跃）** | 汇总全部核心能力：SimPy 静态环/跨轨仿真 + `CCE-Net`（`rebalance_ours`）+ OrbitSim 轨迹协同仿真（`cosim`）+ **TORCH 多跳热-轨与数据锚点重平衡** + **M5 轨道热点刻画与传算重叠微测** |
+| `feat/torch-rebalance`<br>（同 `experiment/recovery-bound`） | **已合入 `main`** | 实现 `src/satsim/cosim/thermal_rebalance.py`（`TorchRebalance` / `deadline_rc`）、Agentic 原图锚点拉取、零开销池化恢复上界与全套论文实验（`docs/TORCH_PAPER_REPORT.md`） |
+| `idea/M5-traffic-compute-overlap` | **已合入 `main`** | M5 轨道入网突发与热点同时性（Hotspot Concurrency）刻画（`scripts/m5_hotspots/`）及单瓶颈链路下“截止期排序 × 传算重叠” 2×2 消融微测（`docs/ideas/M5_traffic_compute_overlap.md`） |
+| `exp/dynamic-batch-hetero-v1` | **独立实验归档** | 针对早期四星静态环网动态自发热场景的探索分支，验证集中放置（`placement.mode: pack` + `max_busy_nodes`）与节点级轻度热参数异构（`*_by_node`）对恢复结论 C1 的作用（见该分支 `docs/notes/dynamic_thermal_batch_hetero.md`）；因主线已通过真实轨道迹线（`cosim` + `TORCH`）自然解决冷热与日照相位不对称问题，该分支保留作为专题对照，不合入主表 |
+
+代码目录：输入与场景生成在 `input/`（命令行入口在 `configs/exp_*.yaml`）；SimPy 仿真引擎与调度策略在 `src/satsim/method/`；轨迹协同仿真与 TORCH 调度在 `src/satsim/cosim/`；指标汇总与结论检验在 `src/satsim/output/`。

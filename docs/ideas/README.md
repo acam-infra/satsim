@@ -25,9 +25,15 @@
 | [M2](M2_staggered_premigrate.md) | 提前迁、错峰迁 | 方法（时间） | 草案 | 利用可预测的变暗时刻，把迁移在时间上摊开 |
 | [M3](M3_transfer_vs_recompute.md) | 传 KV、重算还是留下 | 方法（迁移方式） | 草案 | 每次迁移在三种方式里按预计完成时间选 |
 | [M4](M4_deadline_admission.md) | 截止感知的准入与排序 | 方法（带宽） | 草案 | 把一次迁移当一组流，按超时线决定发不发、谁先传 |
-| [M5](M5_traffic_compute_overlap.md) | 流量调度与传算重叠 | 方法（带宽与切换） | 草案 | 固定初次分配，拆开测迁移流排序与源端边传边算 |
+| [M5](M5_traffic_compute_overlap.md) | 流量调度与传算重叠 | 方法（带宽与切换） | 有结果（已合入 `main`） | 固定初次分配，刻画轨道突发热点同时性，拆开测迁移流排序与源端边传边算 |
 
 建议顺序：`B1` 最先做。它决定剩给 `M*` 的空间有多大；如果贪心加准入已经接近无消耗迁移，`M*` 的故事要重新想。`S1` 和 `B1` 可以同时做。
+
+> **注（主线进展与分支状态）**：
+> - 静态环/跨轨拓扑上的 `rebalance_ours` 已落地 **CCE-Net**（算网交换打分）；
+> - 真实轨道接触迹线协同仿真（`cosim`）上的多跳热-轨与数据锚点流重平衡已落地 **TORCH**（原分支 `feat/torch-rebalance` / `experiment/recovery-bound`，已合入 `main`，详见 [`docs/TORCH_PAPER_REPORT.md`](../TORCH_PAPER_REPORT.md)）；
+> - `idea/M5-traffic-compute-overlap` 的轨道热点刻画与单瓶颈 2×2 微测脚本已合入 `main`（`scripts/m5_hotspots/`）；
+> - 四星环网动态温控 `pack + hetero` 探索保留在独立分支 `exp/dynamic-batch-hetero-v1` 供专题查阅。
 
 ## 隔离规则
 
