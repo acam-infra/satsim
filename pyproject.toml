@@ -16,6 +16,7 @@ dependencies = [
 [project.scripts]
 satsim = "satsim.__main__:main"
 satsim-cosim = "satsim.cosim.run:main"
+satsim-suite = "satsim.cosim.suite:main"
 
 [build-system]
 requires = ["uv_build>=0.12.23,<0.13.0"]
