@@ -106,13 +106,16 @@ class CoWorld:
         self.hop_lat = float(cfg["net"]["hop_latency_s"])
         self.mig_timeout = float(cfg["migration"]["timeout_s"])
         self.switch_s = float(cfg["migration"]["switch_s"])
+        self.delta_kv = bool(cfg["migration"].get("delta_kv", False))
+        self.max_delta_kv_rounds = 2
         self.period = float(cfg["control_period_s"])
         self.stream = cfg["delivery"] == "stream"
         self.nodes: dict[int, list[CRequest]] = {j: [] for j in trace.compute}
         self.reserved = {j: 0.0 for j in trace.compute}  # KV bytes of inbound uploads / migrations
         self.reqs: list[CRequest] = []
         self.topo_event = env.event()
-        self.acc = dict(mig=0, mig_abort=0, mig_bytes=0.0, upload_fail=0, throttle_s=0.0)
+        self.acc = dict(mig=0, mig_abort=0, mig_bytes=0.0, delta_kv_bytes=0.0,
+                        upload_fail=0, throttle_s=0.0)
         thermal_cfg = cfg.get("thermal")
         self.thermal = DynamicThermal({**cfg["power"], **thermal_cfg}, n=trace.n) if thermal_cfg else None
         self.thermal_f = [self.thermal.clock_factor(j, 0.0) if self.thermal else 1.0 for j in range(trace.n)]
@@ -345,6 +348,8 @@ class CoWorld:
         r.migrating = True
         need = r.reserved_tokens * self.bpt
         self.reserved[dst] += need
+        start_t = self.env.now
+        gen_start = r.progress_at(start_t)
         nbytes = r.kv * self.bpt
         f = self.net.add("mig", p[0], p[1], nbytes, req=r.i)
         self.log("mig", req=r.i, src=src, dst=dst, path=p[0], GB=nbytes / 1e9)
@@ -353,7 +358,34 @@ class CoWorld:
         if not ok:
             self.net.cancel(f)
         else:
-            yield self.env.timeout(self.hop_lat * len(p[1]) + self.switch_s)
+            # While the source keeps decoding, the KV stream falls behind. Send up to two
+            # tail flows for the tokens produced during each transfer; the residual after the
+            # second round is handed over locally during the switch (no third flow).
+            if self.delta_kv:
+                for _ in range(self.max_delta_kv_rounds):
+                    if r.state != "decode" or r.node != src:
+                        break
+                    elapsed = self.env.now - start_t
+                    if elapsed >= self.mig_timeout:
+                        ok = False
+                        break
+                    gen_round_start = r.progress_at(self.env.now)
+                    delta = max(0.0, gen_round_start - gen_start)
+                    if delta <= 1e-9:
+                        break
+                    tail_bytes = delta * self.bpt
+                    tail = self.net.add("mig_delta", p[0], p[1], tail_bytes, req=r.i)
+                    self.log("mig_delta", req=r.i, src=src, dst=dst, path=p[0], GB=tail_bytes / 1e9)
+                    yield tail.done | self.env.timeout(self.mig_timeout - elapsed)
+                    if not tail.done.triggered or tail.failed:
+                        self.net.cancel(tail)
+                        ok = False
+                        break
+                    nbytes += tail_bytes
+                    self.acc["delta_kv_bytes"] += tail_bytes
+                    gen_start = r.progress_at(self.env.now)
+            if ok:
+                yield self.env.timeout(self.hop_lat * len(p[1]) + self.switch_s)
         self.reserved[dst] -= need
         r.migrating = False
         if not ok:

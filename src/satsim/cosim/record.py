@@ -88,6 +88,7 @@ def summarize(w: CoWorld) -> dict:
         "migrations": w.acc["mig"],
         "mig_abort": w.acc["mig_abort"],
         "mig_GB": w.acc["mig_bytes"] / 1e9,
+        "delta_kv_GB": w.acc.get("delta_kv_bytes", 0.0) / 1e9,
         "upload_fail": w.acc["upload_fail"],
         "link_GB_hops": w.net.bytes_hops / 1e9,
         "badput_tok_s": badput_gen / window,
