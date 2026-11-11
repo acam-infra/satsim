@@ -269,3 +269,29 @@ def test_skips_expired_requests_and_prioritizes_slo_rescue():
     w.env.run(until=w.env.now + 0.001)
     assert r_expired.migrating is False
     assert r_rescue.migrating is True
+
+
+def test_proactively_evacuates_near_hot_overloaded_sunlit_node():
+    # Node 2 and Node 3 are both sunlit and not yet throttled (thermal_f == 1.0).
+    # Node 3 is overloaded with 4 long requests at 80 C (guaranteed to cross 84 C and throttle),
+    # while Node 2 is cool at 35 C with 0 requests. CoolAware should proactively evacuate from Node 3 to Node 2.
+    w = _create_world({"place": "nearest", "migrate": "cool_aware"})
+    w.thermal_f[2] = 1.0
+    w.thermal._T[2] = 35.0
+    w.thermal_f[3] = 1.0
+    w.thermal._T[3] = 80.0
+
+    reqs = [
+        CRequest(i=10 + k, origin=0, t=0.0, long=True, pin=2000, pout=24000, upload_bytes=1e6,
+                 deadline=700.0, node=3, state="decode", gen=500.0)
+        for k in range(4)
+    ]
+    w.nodes[3].extend(reqs)
+    assert not w.is_hot(3)
+    assert CoolAware._will_throttle(w, 3) is True
+
+    w.policy.rebalance(w)
+    w.env.run(until=w.env.now + 0.001)
+    assert sum(1 for r in reqs if r.migrating) == 1
+    assert w.reserved[2] > 0
+

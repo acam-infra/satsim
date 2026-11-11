@@ -11,7 +11,12 @@ from satsim.cosim.suite import apply_set_block
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SUITES = ("e1_stage1_hotspot.yaml", "e3_bw_kv_sweep.yaml", "e4_fair_quota.yaml")
+SUITES = (
+    "e1_stage1_hotspot.yaml",
+    "e2_hotspot_stress_paper.yaml",
+    "e3_bw_kv_sweep.yaml",
+    "e4_fair_quota.yaml",
+)
 
 
 def test_t8_suite_configs_valid_and_instantiable():

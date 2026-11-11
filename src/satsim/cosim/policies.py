@@ -541,6 +541,17 @@ class CoolAware:
                 return True
         return False
 
+    @staticmethod
+    def _will_throttle(w, j: int) -> bool:
+        """True when resident batch heat load will push node j into thermal throttling before decode ends."""
+        if getattr(w, "thermal", None) is None or not w.nodes[j]:
+            return False
+        rem = max((r.remaining for r in w.nodes[j]), default=0.0)
+        if rem <= 0.0:
+            return False
+        ctx = sum(r.kv for r in w.nodes[j])
+        return thermal_service_clock(w, j, len(w.nodes[j]), rem, ctx) < 1.0
+
     def _decoded_on_src(self, w, src: int, now: float, dt: float) -> float:
         """Tokens decoded at the source while KV streams across ISLs."""
         if dt <= 0.0:
@@ -580,7 +591,12 @@ class CoolAware:
             return INF if return_time == INF else t_transfer + (return_time - t_start)
 
         extra = r if joining else None
-        f_lit = w.thermal_f[node] if getattr(w, "thermal_f", None) is not None else 1.0
+        batch = max(len(w.nodes[node]) + (1 if joining else 0), 1)
+        ctx = sum(x.kv for x in w.nodes[node]) + (r.kv if joining else 0.0)
+        if getattr(w, "thermal", None) is not None:
+            f_lit = thermal_service_clock(w, node, batch, left, ctx)
+        else:
+            f_lit = w.thermal_f[node] if getattr(w, "thermal_f", None) is not None else 1.0
         f_dark = min(w.f_dark, f_lit)
         it_lit = w.iter_of(node, extra, f=f_lit)
         it_dark = w.iter_of(node, extra, f=f_dark)
@@ -618,7 +634,12 @@ class CoolAware:
 
         candidate_reqs = []
         for j in w.tr.compute:
-            if not (w.is_eclipse(j, now) or self._enters_eclipse_soon(w, j, now) or w.is_hot(j)):
+            if not (
+                w.is_eclipse(j, now)
+                or self._enters_eclipse_soon(w, j, now)
+                or w.is_hot(j)
+                or self._will_throttle(w, j)
+            ):
                 continue
             for r in w.nodes[j]:
                 if r.state != "decode" or r.migrating or r.n_mig >= self.max_mig_per_req or r.remaining <= 0:

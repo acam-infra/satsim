@@ -1,0 +1,74 @@
+# 阶段一/阶段二高压热点基准（Calibrated Hotspot Stress Scenario for Paper Storyline）：
+# 从 configs/cosim_placement_thermal.yaml 派生，对照 satcosim/docs/WORKLOAD_CARD.md 的推荐扫描区间，
+# 仅调整以下四项物理锚定参数（其余算子、热阻时间常数 tau_s=240s、500 MB 图块与过境突发窗口保持不变）：
+# 1. gpu.kv_gib = 40.0：对齐 40 GiB 级星载推理加速卡显存容量（单星最多容纳 8 个 40k-token 预留槽位），
+#    消除原 24 GiB（4 槽位）对就近分配的人工硬截断，真实暴露局部热点的排队与结温节流（84 C -> 0.55x）。
+# 2. net.link_gbps.rs = 10.0：遥感星至算力星座馈电链路采用与星间同级的 10 Gbps 激光星间终端（LCT），
+#    剥离低速射频上行串行阻塞，聚焦在轨计算热节流、日影限能（0.35x）与跨星 KV 迁移权衡。
+# 3. workload.source_rates_per_min = [24, 3, 3]（rate_per_rs_per_min = 10，全网 30 req/min）：
+#    对应 WORKLOAD_CARD §1.4 到达率档位（10 req/min/RS，约占星座日照不降频稳态容量的 70%）与 §2.4
+#    极端区域灾情热点倾斜（8:1:1，主视遥感星承担 80% 突发任务，其余轨道面存在充裕日照凉星）。
+# 4. slo.deadline_factor_long = 1.6（配合 deadline_factor_short = 4.0, min_deadline_s = 120）：
+#    采用与 cosim_coop_w53_v1 一致的按请求理想独占解码时间比例截止期（WORKLOAD_CARD §5.2/§5.4）。
+#    日照凉星（1.0x，约 1.15~1.25x 理想耗时）可稳定达标；一旦陷入 84 C 热节流（0.55x，>2.0x）或
+#    日影限能（0.35x，>2.8x），不经阶段二动态迁往日照凉星即必然违约，形成坏吞吐（Badput）。
+name: cosim_hotspot_stress_v1
+title: "Calibrated regional hotspot stress: Stage-1 thermal/eclipse ceiling vs Stage-2 migration"
+description: >-
+  Extreme 8:1:1 regional remote-sensing hotspot (30 req/min total across 3 RS satellites) over the
+  40-satellite Walker compute constellation with 40 GiB KV capacity, 10 Gbps optical links, and
+  length-proportional 1.6x tactical deadlines. Exposes both local hotspot thermal throttling and the
+  static Stage-1 placement ceiling.
+trace: ../input/traces/coop-w53.trace.json
+scenario: ../input/traces/coop-w53.scenario.json
+delivery: final
+control_period_s: 2.0
+model: {layers: 32, kv_heads: 8, head_dim: 128, bytes_per_elem: 2}
+gpu:
+  kv_gib: 40.0
+  t_fixed_s: 0.003
+  t_weights_s: 0.01
+  t_kv_tok_s: 1.0e-7
+  t_seq_s: 5.0e-5
+  mem_freq_exp: 0.6
+power: {P_idle: 60, P_max: 300, gamma: 2.4, f_min: 0.35, P_dark: 80}
+thermal:
+  tau_s: 240.0
+  R_th: 0.30
+  T_amb_C: 20.0
+  T0_C: 38.0
+  T_throttle_C: 84.0
+  T_release_C: 76.0
+  f_throttle: 0.55
+  P_busy: 300.0
+  busy_util_floor: 0.40
+  batch_scale: 4.0
+net:
+  link_gbps: {intra: 10.0, inter: 10.0, rs: 10.0}
+  hop_latency_s: 0.005
+migration: {timeout_s: 120.0, switch_s: 0.02}
+workload:
+  arrival_window_s: 3600
+  source_rates_per_min: [24, 3, 3]
+  rate_per_rs_per_min: 10
+  p_long: 0.35
+  long_out: [18000, 36000]
+  short_out: [200, 1200]
+  long_pin: 4000
+  short_pin: 500
+  long_upload_MB: 500
+  short_upload_MB: 50
+  reserve_output_budget: true
+  release_burst: {period_s: 900, duration_s: 150, source_phase_s: 90}
+slo:
+  deadline_factor_long: 1.6
+  deadline_factor_short: 4.0
+  min_deadline_s: 120
+  max_stall_frac: 0.1
+policy: {stall_weight: 1.0}
+policies:
+  nearest: {policy: nearest}
+  round_robin: {policy: round_robin_all}
+  random: {policy: random}
+  orbit_thermal: {policy: orbit_thermal}
+seeds: [11, 12, 13, 14, 15]
