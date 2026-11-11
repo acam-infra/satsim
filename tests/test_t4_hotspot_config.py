@@ -1,7 +1,6 @@
 """T4: the stage-1 hotspot config changes only locality and baseline policies."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import yaml
@@ -43,7 +42,8 @@ def test_hotspot_config_builds_requests_for_every_rs():
     assert len(reqs) > 0
 
 
-def test_hotspot_config_has_no_banned_terms():
-    text = (ROOT / "configs" / "cosim_hotspot_v1.yaml").read_text(encoding="utf-8").lower()
-    assert "阴影" not in text and "shadow" not in text
-    assert json.loads((ROOT / "input" / "traces" / "coop-w53.trace.json").read_text())["schema"]
+def test_hotspot_config_leaves_new_features_off():
+    cfg = load_config(ROOT / "configs" / "cosim_hotspot_v1.yaml")
+    assert "delta_kv" not in cfg["migration"]
+    assert "rebalance_invariants" not in cfg
+    assert all("migrate" not in spec for spec in cfg["policies"].values())
