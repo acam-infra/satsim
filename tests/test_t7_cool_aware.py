@@ -177,3 +177,95 @@ def test_destination_limit_per_cycle():
     # Only r1 should migrate to node 2, r2 should stay because node 2 already took 1 in this cycle
     assert r1.migrating is True
     assert r2.migrating is False
+
+
+def test_orbit_thermal_and_orbit_load_placer_composition():
+    pol_th = make_policy({"place": "orbit_thermal", "migrate": "cool_aware"})
+    assert pol_th.id == "orbit_thermal+cool_aware"
+    assert pol_th.placer.thermal_aware is True
+
+    pol_ld = make_policy({"place": "orbit_load", "place_kwargs": {"thermal_aware": False}, "migrate": "cool_aware"})
+    assert pol_ld.id == "orbit_load+cool_aware"
+    assert pol_ld.placer.thermal_aware is False
+
+    pol_rr = make_policy({"place": "round_robin_all", "migrate": "cool_aware"})
+    assert pol_rr.id == "round_robin_all+cool_aware"
+
+
+def test_skips_short_lived_path_to_avoid_abort():
+    trace = Trace({
+        "schema": "orbitsim.contact_trace/v1",
+        "name": "t7-short-link",
+        "horizon_s": 1000.0,
+        "nodes": [
+            {"id": 0, "role": "rs"},
+            {"id": 1, "role": "compute"},
+            {"id": 2, "role": "compute"},
+        ],
+        "edges": [
+            {"u": 0, "v": 1, "kind": "rs", "up": [[0, 1000]]},
+            {"u": 0, "v": 2, "kind": "rs", "up": [[0, 1000]]},
+            # Link 1->2 goes down at t=10.5s, before a ~1.5s KV transfer at 1 Gbps can complete
+            {"u": 1, "v": 2, "kind": "intra", "up": [[0, 10.5]]},
+        ],
+        "dark": [[], [[0, 1000]], []],
+    })
+    cfg = copy.deepcopy(CFG)
+    cfg["net"] = {"link_gbps": {"intra": 1.0, "inter": 1.0, "rs": 5.0}, "hop_latency_s": 0.005}
+    env = simpy.Environment(initial_time=10.0)
+    w = CoWorld(env, trace, cfg, make_policy({"place": "nearest", "migrate": "cool_aware"}))
+    w.thermal_f[2] = 1.0
+    w.thermal._T[2] = 35.0
+
+    req = CRequest(i=1, origin=0, t=0.0, long=True, pin=1000, pout=4000, upload_bytes=1e6,
+                   deadline=600.0, node=1, state="decode", gen=500.0)
+    w.nodes[1].append(req)
+    w.policy.rebalance(w)
+    assert req.migrating is False
+
+
+def test_skips_destination_with_inflight_migration_across_ticks():
+    w = _create_world(
+        {"place": "nearest", "migrate": "cool_aware"},
+        cfg_overrides={"net": {"link_gbps": {"intra": 0.2, "inter": 0.2, "rs": 5.0}, "hop_latency_s": 0.005}},
+    )
+    w.thermal_f[2] = 1.0
+    w.thermal._T[2] = 35.0
+    w.thermal_f[3] = 0.55
+    w.thermal._T[3] = 90.0
+
+    r1 = CRequest(i=1, origin=0, t=0.0, long=True, pin=1000, pout=8000, upload_bytes=1e6,
+                  deadline=500.0, node=1, state="decode", gen=100.0)
+    r2 = CRequest(i=2, origin=0, t=0.0, long=True, pin=1000, pout=8000, upload_bytes=1e6,
+                  deadline=550.0, node=1, state="decode", gen=100.0)
+    w.nodes[1].extend([r1, r2])
+
+    w.policy.rebalance(w)
+    w.env.run(until=w.env.now + 2.0)
+    assert r1.migrating is True
+
+    # Next tick while r1's KV flow to node 2 is still in flight: r2 must not pile onto node 2
+    w.policy.rebalance(w)
+    w.env.run(until=w.env.now + 0.01)
+    assert r2.migrating is False
+
+
+def test_skips_expired_requests_and_prioritizes_slo_rescue():
+    w = _create_world({"place": "nearest", "migrate": "cool_aware"})
+    w.thermal_f[2] = 1.0
+    w.thermal._T[2] = 35.0
+    w.thermal_f[3] = 0.55
+    w.thermal._T[3] = 90.0
+
+    # r_expired already missed its deadline (deadline=5.0 < now=10.0)
+    r_expired = CRequest(i=1, origin=0, t=0.0, long=True, pin=1000, pout=4000, upload_bytes=1e6,
+                         deadline=5.0, node=1, state="decode", gen=100.0)
+    # r_rescue fails on eclipsed node 1 (~120s > slack=90s) but finishes in time on cool sunlit node 2 (~50s <= 90s)
+    r_rescue = CRequest(i=2, origin=0, t=0.0, long=True, pin=1000, pout=4000, upload_bytes=1e6,
+                        deadline=100.0, node=1, state="decode", gen=100.0)
+    w.nodes[1].extend([r_expired, r_rescue])
+
+    w.policy.rebalance(w)
+    w.env.run(until=w.env.now + 0.001)
+    assert r_expired.migrating is False
+    assert r_rescue.migrating is True

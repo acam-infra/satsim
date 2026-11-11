@@ -187,3 +187,11 @@ def test_suite_cli_main(tmp_path: Path):
 
     assert (out_dir / "runs.csv").exists()
     assert (out_dir / "summary.md").exists()
+
+
+def test_coupled_axis_sets_both_paths():
+    from satsim.cosim.suite import apply_dotted_set
+
+    cfg = {"net": {"link_gbps": {"intra": 10.0, "inter": 10.0, "rs": 5.0}}}
+    apply_dotted_set(cfg, "net.link_gbps.intra,net.link_gbps.inter", 0.3)
+    assert cfg["net"]["link_gbps"] == {"intra": 0.3, "inter": 0.3, "rs": 5.0}
