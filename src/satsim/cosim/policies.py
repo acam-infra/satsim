@@ -496,6 +496,142 @@ class RoundRobin(Greedy):
 
 
 
+class CoolAware:
+    """Stage 2 cool-aware migrator: moves decoding requests hurt by eclipse or heat to cool lit nodes."""
+
+    id = "cool_aware"
+
+    def __init__(
+        self,
+        lead_s: float = 60.0,
+        cool_margin_C: float = 10.0,
+        min_gain_s: float = 30.0,
+        max_inflight: int | None = None,
+        max_mig_per_req: int | None = None,
+        interval_s: float | None = None,
+    ):
+        self.lead_s = float(lead_s)
+        self.cool_margin_C = float(cool_margin_C)
+        self.min_gain_s = float(min_gain_s)
+        self.max_inflight = MAX_INFLIGHT if max_inflight is None else int(max_inflight)
+        self.max_mig_per_req = MAX_MIG_PER_REQ if max_mig_per_req is None else int(max_mig_per_req)
+        self.interval_s = float(interval_s) if interval_s is not None else None
+        self.next_plan = float(interval_s) if interval_s is not None else 0.0
+
+    def place(self, w, r):
+        return None
+
+    def _enters_eclipse_soon(self, w, j: int, now: float) -> bool:
+        for a, b, dark in w.tr.power_segments(j, now):
+            if a >= now + self.lead_s:
+                break
+            if dark:
+                return True
+        return False
+
+    def _est_finish(self, w, node: int, r, now: float, t_transfer: float, joining: bool) -> float:
+        t_start = now + t_transfer
+        if t_start >= w.tr.horizon:
+            return INF
+
+        extra = r if joining else None
+        f_lit = w.thermal_f[node] if getattr(w, "thermal_f", None) is not None else 1.0
+        f_dark = min(w.f_dark, f_lit)
+        it_lit = w.iter_of(node, extra, f=f_lit)
+        it_dark = w.iter_of(node, extra, f=f_dark)
+
+        left = r.remaining
+        decode_end = INF
+        for a, b, dark in w.tr.power_segments(node, t_start):
+            it = it_dark if dark else it_lit
+            span = b - a
+            if left * it <= span:
+                decode_end = a + left * it
+                break
+            left -= span / it
+
+        if decode_end == INF or decode_end >= w.tr.horizon:
+            return INF
+
+        return_time = w.tr.next_conn(r.origin, node, decode_end)
+        if return_time == INF:
+            return INF
+
+        t_decode_remaining = decode_end - t_start
+        t_return = return_time - decode_end
+        return t_transfer + t_decode_remaining + t_return
+
+    def rebalance(self, w) -> None:
+        now = w.env.now
+        if self.interval_s is not None:
+            if now < self.next_plan:
+                return
+            self.next_plan = now + self.interval_s
+
+        budget = self.max_inflight - inflight(w)
+        if budget <= 0:
+            return
+
+        candidate_reqs = []
+        for j in w.tr.compute:
+            if not (w.is_eclipse(j, now) or self._enters_eclipse_soon(w, j, now) or w.is_hot(j)):
+                continue
+            for r in w.nodes[j]:
+                if r.state != "decode" or r.migrating or r.n_mig >= self.max_mig_per_req or r.remaining <= 0:
+                    continue
+                candidate_reqs.append(r)
+
+        if not candidate_reqs:
+            return
+
+        candidate_reqs.sort(key=lambda r: (r.deadline - now, r.i))
+
+        edge_users: dict[int, int] = {}
+        for f in w.net.flows:
+            for _, _, e in f.hops:
+                edge_users[e] = edge_users.get(e, 0) + 1
+
+        claimed_dst: set[int] = set()
+
+        for r in candidate_reqs:
+            if budget <= 0:
+                break
+            src = r.node
+
+            est_finish_src = self._est_finish(w, src, r, now, t_transfer=0.0, joining=False)
+
+            best_dst = None
+            best_gain = self.min_gain_s - 1e-9
+
+            for k in w.tr.compute:
+                if k == src or k in claimed_dst:
+                    continue
+                if w.is_eclipse(k, now) or not w.is_cool(k, self.cool_margin_C) or not w.fits(k, r):
+                    continue
+
+                p = w.tr.path(src, k, now)
+                if p is None or not p[1]:
+                    continue
+                bw = min(w.net.cap[e] / (edge_users.get(e, 0) + 1.0) for e in p[1])
+                if bw <= 0:
+                    continue
+                t_transfer = (r.kv * w.bpt) / bw + w.hop_lat * len(p[1])
+
+                est_finish_k = self._est_finish(w, k, r, now, t_transfer=t_transfer, joining=True)
+                if est_finish_k == INF:
+                    continue
+
+                gain = est_finish_src - est_finish_k
+                if gain >= self.min_gain_s and gain > best_gain:
+                    best_gain = gain
+                    best_dst = k
+
+            if best_dst is not None:
+                if w.migrate(r, best_dst):
+                    claimed_dst.add(best_dst)
+                    budget -= 1
+
+
 class CompositePolicy:
     """Orthogonal composition of any Placer (place) and any Migrator (rebalance)."""
 
@@ -527,12 +663,14 @@ MIGRATORS = {
     "none": None,
     "reactive": Reactive,
     "contact_aware": ContactAware,
+    "cool_aware": CoolAware,
 }
 
 POLICIES = {
     **PLACERS,
     "reactive": Reactive,
     "contact_aware": ContactAware,
+    "cool_aware": CoolAware,
 }
 
 def make_policy(spec: dict):

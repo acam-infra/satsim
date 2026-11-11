@@ -28,7 +28,7 @@ REQUIRED = {"name", "trace", "scenario", "model", "gpu", "power", "net", "migrat
             "slo", "delivery", "control_period_s", "policies", "seeds"}
 REBALANCE_INVARIANT_KEYS = ("interval_s", "max_inflight", "max_mig_per_req")
 _INVARIANT_TARGETS = {"thermal_rebalance", "torch_rebalance", "torch_lp"}
-_INVARIANT_MIGRATORS = {"reactive", "contact_aware"}
+_INVARIANT_MIGRATORS = {"reactive", "contact_aware", "cool_aware"}
 
 
 def apply_rebalance_invariants(cfg: dict, spec: dict) -> dict:
