@@ -11,7 +11,8 @@ from satsim.method.engine.timing import iter_time
 
 class ThermalRebalance:
     def __init__(self, placement: dict, externality: bool = True, interval_s: float = 30.0,
-                 deadline_aware: bool = True, thermal_aware: bool | str = True):
+                 deadline_aware: bool = True, thermal_aware: bool | str = True,
+                 max_inflight: int | None = None, max_mig_per_req: int | None = None):
         self.placement = make_policy(placement)
         self.externality = externality
         self.deadline_aware = deadline_aware
@@ -19,6 +20,8 @@ class ThermalRebalance:
         self.rc_forecast = thermal_aware == "rc"
         self.interval_s = interval_s
         self.next_plan = interval_s
+        self.max_inflight = MAX_INFLIGHT if max_inflight is None else int(max_inflight)
+        self.max_mig_per_req = 1 if max_mig_per_req is None else int(max_mig_per_req)
 
     def place(self, w, r):
         return self.placement.place(w, r)
@@ -66,7 +69,7 @@ class ThermalRebalance:
         if now < self.next_plan:
             return
         self.next_plan = now + self.interval_s
-        budget = MAX_INFLIGHT - inflight(w)
+        budget = self.max_inflight - inflight(w)
         if budget <= 0:
             return
         ready = [j for j in w.tr.compute if w.reserved[j] == 0]
@@ -75,7 +78,7 @@ class ThermalRebalance:
         moves = []
         for src, batch in w.nodes.items():
             for r in batch:
-                if not r.long or r.migrating or r.n_mig or now >= r.deadline:
+                if not r.long or r.migrating or r.n_mig >= self.max_mig_per_req or now >= r.deadline:
                     continue
                 stay = before[src][r]
                 if self.deadline_aware and stay < r.deadline - 60:
@@ -230,6 +233,10 @@ class TorchRebalance:
     5. Agentic Data-Anchor Tether Awareness (optional): penalizes or restricts migrating
        high-reaccess tasks (Type-1 wide-area scan) far from their anchor satellite u_0 while
        routing zero-reaccess deep-reasoning tasks (Type-2/Type-3 phase-2) to distant cold nodes.
+
+    ``viable_slack_s`` and ``pre_admission_relay`` are the **admission gate**, not migration
+    quota. They keep their existing parameter names and can be ablated independently of
+    ``rebalance_invariants``; the latter only controls interval / inflight / per-request moves.
     """
 
     id = "torch"
