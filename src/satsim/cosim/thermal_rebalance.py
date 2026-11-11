@@ -391,10 +391,11 @@ class TorchRebalance:
                 bw = min(w.net.cap[e] / (edge_users.get(e, 0) + 1.0) for e in p[1])
             else:
                 bw = min(w.net.cap[e] for e in p[1])
-            pull_s = reaccess_rem * ((tile_bytes / bw) * hops + w.hop_lat * hops)
+            pull_s = reaccess_rem * (tile_bytes / bw + w.hop_lat * hops)
             return pull_s, tuple(p[1])
         min_cap = min(w.net.cap)
-        return reaccess_rem * (tile_bytes / min_cap * 4.0), ()
+        # 无路径时按 4 跳估计
+        return reaccess_rem * (tile_bytes / min_cap + w.hop_lat * 4), ()
 
     def _eval_job_on_traj(
         self, w, node: int, r, xs: list[float], ts: list[float], start: float,
