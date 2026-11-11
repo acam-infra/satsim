@@ -12,6 +12,7 @@ import argparse
 import copy
 import json
 import statistics as st
+import sys
 import time
 from pathlib import Path
 
@@ -42,6 +43,18 @@ def load_config(path: Path, overrides: list[str] = ()) -> dict:
     if cfg["delivery"] not in ("final", "stream"):
         raise SystemExit("delivery must be final | stream")
     cfg["_dir"] = str(path.parent.resolve())
+    long_deadline_s = cfg["slo"].get("long_deadline_s")
+    if long_deadline_s is not None:
+        trace_path = (Path(cfg["_dir"]) / cfg["trace"]).resolve()
+        horizon_s = float(json.loads(trace_path.read_text(encoding="utf-8"))["horizon_s"])
+        arrival_window_s = float(cfg["workload"]["arrival_window_s"])
+        if horizon_s - arrival_window_s < float(long_deadline_s):
+            print(
+                "warning: trace horizon minus arrival_window_s is shorter than long_deadline_s; "
+                "long requests may not have time to finish and the all-request P95 may be "
+                "dominated by censoring",
+                file=sys.stderr,
+            )
     return cfg
 
 

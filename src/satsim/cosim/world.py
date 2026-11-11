@@ -112,7 +112,7 @@ class CoWorld:
         self.reserved = {j: 0.0 for j in trace.compute}  # KV bytes of inbound uploads / migrations
         self.reqs: list[CRequest] = []
         self.topo_event = env.event()
-        self.acc = dict(mig=0, mig_abort=0, mig_bytes=0.0, upload_fail=0)
+        self.acc = dict(mig=0, mig_abort=0, mig_bytes=0.0, upload_fail=0, throttle_s=0.0)
         thermal_cfg = cfg.get("thermal")
         self.thermal = DynamicThermal({**cfg["power"], **thermal_cfg}, n=trace.n) if thermal_cfg else None
         self.thermal_f = [self.thermal.clock_factor(j, 0.0) if self.thermal else 1.0 for j in range(trace.n)]
@@ -159,6 +159,8 @@ class CoWorld:
             previous = self.f_of(j)
             self.thermal_f[j] = self.thermal.clock_factor(j, now)
             current = self.f_of(j)
+            if self.thermal_f[j] < 1.0:
+                self.acc["throttle_s"] += self.period
             if current != previous:
                 self.poke(j)
             self.thermal_power_w[j] = self.device_power(len(self.nodes[j]), current)
