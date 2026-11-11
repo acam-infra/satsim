@@ -1,0 +1,38 @@
+# T8 · E4: Fair-quota comparison across runtime migrators (interval=5s, max_inflight=24, max_mig_per_req=4).
+# Evaluates both staggered bursts (source_phase_s=90, base config) and aligned bursts (source_phase_s=0,
+# matching docs/torch_paper_eval seeds 11-15).
+name: e4_fair_quota
+base: ../cosim_placement_thermal.yaml
+seeds: [11, 12, 13, 14, 15]
+set:
+  rebalance_invariants: {interval_s: 5.0, max_inflight: 24, max_mig_per_req: 4}
+  workload.rate_per_rs_per_min: 14
+axes:
+  workload.release_burst.source_phase_s: [90, 0]
+policies:
+  orbit_thermal: {policy: orbit_load}
+  deadline_rc:
+    policy: thermal_rebalance
+    placement: {policy: orbit_load}
+    thermal_aware: rc
+  torch_no_relay:
+    policy: torch_rebalance
+    placement: {policy: orbit_load}
+    pre_admission_relay: false
+    viable_slack_s: 0.0
+  torch_lp:
+    policy: torch_rebalance
+    placement: {policy: orbit_load}
+  orbit_thermal+cool_aware: {place: orbit_thermal, migrate: cool_aware}
+report:
+  baseline: orbit_thermal
+  metrics:
+    - good_long_frac
+    - goodput_tok_s
+    - badput_tok_s
+    - waste_ratio
+    - long_p95_all_s
+    - migrations
+    - mig_abort
+    - mig_GB
+jobs: 4

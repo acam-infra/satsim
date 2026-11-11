@@ -24,7 +24,13 @@ _TRACE_CACHE: dict[str, Trace] = {}
 
 
 def apply_dotted_set(cfg: dict, path: str, val) -> None:
-    """Set a nested dictionary value using a dot-separated path."""
+    """Set one or more nested dictionary values using dot-separated (optionally comma-coupled) paths."""
+    if "," in path:
+        for sub_path in path.split(","):
+            sub = sub_path.strip()
+            if sub:
+                apply_dotted_set(cfg, sub, val)
+        return
     node = cfg
     *head, last = path.split(".")
     for k in head:

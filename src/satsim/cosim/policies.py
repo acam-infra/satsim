@@ -144,6 +144,8 @@ class Ephemeris(Greedy):
 
 
 class ReachableRoundRobin(Greedy):
+    id = "round_robin_all"
+
     def __init__(self):
         self.next_index = 0
 
@@ -160,6 +162,8 @@ class ReachableRoundRobin(Greedy):
 
 
 class LeastReservedKV(Greedy):
+    id = "least_reserved_kv"
+
     def place(self, w, r):
         return min(candidates(w, r), key=lambda j: (w.kv_used(j), j), default=None)
 
@@ -257,6 +261,8 @@ class LeastLoaded:
 
 
 class NearestUpload(Greedy):
+    id = "nearest_upload"
+
     def place(self, w, r):
         best = min(upload_options(w, r), key=lambda x: (x[1], x[0]), default=None)
         return best[0] if best else None
@@ -287,8 +293,11 @@ def thermal_service_clock(w, j, batch, tokens, context):
 class OrbitLoad(Greedy):
     """One-shot placement with upload, an output-length prior, and a load/heat forecast."""
 
+    id = "orbit_load"
+
     def __init__(self, thermal_aware: bool = True):
         self.thermal_aware = thermal_aware
+        self.id = "orbit_thermal" if thermal_aware else "orbit_load"
 
     def place(self, w, r):
         bounds = w.cfg["workload"]["long_out" if r.long else "short_out"]
@@ -532,10 +541,43 @@ class CoolAware:
                 return True
         return False
 
-    def _est_finish(self, w, node: int, r, now: float, t_transfer: float, joining: bool) -> float:
+    def _decoded_on_src(self, w, src: int, now: float, dt: float) -> float:
+        """Tokens decoded at the source while KV streams across ISLs."""
+        if dt <= 0.0:
+            return 0.0
+        f_lit = w.thermal_f[src] if getattr(w, "thermal_f", None) is not None else 1.0
+        f_dark = min(w.f_dark, f_lit)
+        it_lit = w.iter_of(src, None, f=f_lit)
+        it_dark = w.iter_of(src, None, f=f_dark)
+        toks = 0.0
+        t_end = now + dt
+        for a, b, dark in w.tr.power_segments(src, now):
+            if a >= t_end:
+                break
+            seg = min(b, t_end) - a
+            it = it_dark if dark else it_lit
+            if it > 0.0:
+                toks += seg / it
+        return toks
+
+    def _est_finish(
+        self,
+        w,
+        node: int,
+        r,
+        now: float,
+        t_transfer: float,
+        joining: bool,
+        remaining: float | None = None,
+    ) -> float:
         t_start = now + t_transfer
         if t_start >= w.tr.horizon:
             return INF
+
+        left = r.remaining if remaining is None else remaining
+        if left <= 1e-9:
+            return_time = w.tr.next_conn(r.origin, node, t_start)
+            return INF if return_time == INF else t_transfer + (return_time - t_start)
 
         extra = r if joining else None
         f_lit = w.thermal_f[node] if getattr(w, "thermal_f", None) is not None else 1.0
@@ -543,7 +585,6 @@ class CoolAware:
         it_lit = w.iter_of(node, extra, f=f_lit)
         it_dark = w.iter_of(node, extra, f=f_dark)
 
-        left = r.remaining
         decode_end = INF
         for a, b, dark in w.tr.power_segments(node, t_start):
             it = it_dark if dark else it_lit
@@ -582,34 +623,38 @@ class CoolAware:
             for r in w.nodes[j]:
                 if r.state != "decode" or r.migrating or r.n_mig >= self.max_mig_per_req or r.remaining <= 0:
                     continue
+                if now >= r.deadline:
+                    continue
                 candidate_reqs.append(r)
 
         if not candidate_reqs:
             return
 
-        candidate_reqs.sort(key=lambda r: (r.deadline - now, r.i))
-
         edge_users: dict[int, int] = {}
+        claimed_dst: set[int] = set()
         for f in w.net.flows:
             for _, _, e in f.hops:
                 edge_users[e] = edge_users.get(e, 0) + 1
+            if f.tag in ("mig", "mig_delta") and f.hops:
+                claimed_dst.add(f.hops[-1][1])
 
-        claimed_dst: set[int] = set()
-
+        proposals = []
         for r in candidate_reqs:
-            if budget <= 0:
-                break
             src = r.node
-
             est_finish_src = self._est_finish(w, src, r, now, t_transfer=0.0, joining=False)
+            slack = r.deadline - now
+            at_risk = est_finish_src > slack - 30.0
 
             best_dst = None
+            best_p = None
             best_gain = self.min_gain_s - 1e-9
 
             for k in w.tr.compute:
                 if k == src or k in claimed_dst:
                     continue
                 if w.is_eclipse(k, now) or not w.is_cool(k, self.cool_margin_C) or not w.fits(k, r):
+                    continue
+                if not at_risk and len(w.nodes[k]) > 0:
                     continue
 
                 p = w.tr.path(src, k, now)
@@ -618,21 +663,45 @@ class CoolAware:
                 bw = min(w.net.cap[e] / (edge_users.get(e, 0) + 1.0) for e in p[1])
                 if bw <= 0:
                     continue
-                t_transfer = (r.kv * w.bpt) / bw + w.hop_lat * len(p[1])
+                t_net = (r.kv * w.bpt) / bw
+                if getattr(w, "delta_kv", False):
+                    it_src = w.iter_of(src)
+                    ratio = (w.bpt / it_src) / bw if it_src > 0 else 0.0
+                    if ratio >= 0.9:
+                        continue
+                    t_net *= 1.0 + ratio + ratio * ratio
+                t_transfer = t_net + w.hop_lat * len(p[1]) + w.switch_s
+                if t_transfer >= 0.85 * w.mig_timeout or path_lifetime(w, p) < now + 1.15 * t_transfer:
+                    continue
 
-                est_finish_k = self._est_finish(w, k, r, now, t_transfer=t_transfer, joining=True)
-                if est_finish_k == INF:
+                left = r.remaining - self._decoded_on_src(w, src, now, t_transfer)
+                if left <= 0.0:
+                    continue
+
+                est_finish_k = self._est_finish(w, k, r, now, t_transfer=t_transfer, joining=True, remaining=left)
+                if est_finish_k == INF or est_finish_k > slack:
                     continue
 
                 gain = est_finish_src - est_finish_k
                 if gain >= self.min_gain_s and gain > best_gain:
                     best_gain = gain
                     best_dst = k
+                    best_p = p
 
             if best_dst is not None:
-                if w.migrate(r, best_dst):
-                    claimed_dst.add(best_dst)
-                    budget -= 1
+                proposals.append(((0 if at_risk else 1, -round(best_gain, 6), slack, r.i), r, best_dst, best_p))
+
+        proposals.sort(key=lambda x: x[0])
+        for _, r, best_dst, best_p in proposals:
+            if budget <= 0:
+                break
+            if best_dst in claimed_dst:
+                continue
+            if path_lifetime(w, best_p) < now + 2.0:
+                continue
+            if w.migrate(r, best_dst):
+                claimed_dst.add(best_dst)
+                budget -= 1
 
 
 class CompositePolicy:
@@ -654,12 +723,18 @@ class CompositePolicy:
 PLACERS = {
     "rr": RoundRobinPlacer,
     "round_robin": RoundRobinPlacer,
-    "nearest": Nearest, "nearest_upload": NearestUpload, "rr": RoundRobinPlacer,
+    "round_robin_all": ReachableRoundRobin,
+    "round_robin_lit": RoundRobin,
+    "nearest": Nearest,
+    "nearest_upload": NearestUpload,
     "random": RandomPlace,
     "least_loaded": LeastLoaded,
+    "least_reserved_kv": LeastReservedKV,
     "jsq": LeastLoaded,
     "greedy": Greedy,
     "ephemeris": Ephemeris,
+    "orbit_load": OrbitLoad,
+    "orbit_thermal": OrbitLoad,
 }
 
 MIGRATORS = {
@@ -675,6 +750,7 @@ POLICIES = {
     "contact_aware": ContactAware,
     "cool_aware": CoolAware,
 }
+
 
 def make_policy(spec: dict):
     if "place" in spec:
@@ -700,11 +776,12 @@ def make_policy(spec: dict):
 
         return TorchRebalance(**kw)
     table = {"greedy": Greedy, "ephemeris": Ephemeris, "reactive": Reactive, "contact_aware": ContactAware,
+             "cool_aware": CoolAware,
              "round_robin": RoundRobin,
              "random": lambda **_kw: RoundRobin(mode="random"),
              "least_loaded": lambda **_kw: RoundRobin(mode="least_loaded"),
              "round_robin_all": ReachableRoundRobin, "least_reserved_kv": LeastReservedKV,
-             "nearest": Nearest, "orbit_load": OrbitLoad}
+             "nearest": Nearest, "orbit_load": OrbitLoad, "orbit_thermal": OrbitLoad}
     if kind not in table:
         raise ValueError(f"unknown cosim policy {kind!r}; one of {sorted(table)}")
     return table[kind](**kw)
