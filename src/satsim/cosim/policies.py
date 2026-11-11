@@ -364,6 +364,9 @@ class ContactAware(Ephemeris):
     tick, and destinations with an inbound migration in flight are skipped, so a lit satellite is
     not flooded by every request that sees it at once. ``externality=False`` gives the v1 policy
     that scores the mover alone (it over-migrates under load; see docs/notes).
+
+    ``interval_s``, when supplied by ``rebalance_invariants``, is the single cadence gate and
+    supersedes the legacy ``every`` tick gate so all migration strategies replan on the same clock.
     """
 
     id = "contact_aware"
@@ -388,7 +391,7 @@ class ContactAware(Ephemeris):
 
     def rebalance(self, w) -> None:
         self._tick += 1
-        if self.every and self._tick % self.every:
+        if self.interval_s is None and self.every and self._tick % self.every:
             return
         now = w.env.now
         if self.interval_s is not None:

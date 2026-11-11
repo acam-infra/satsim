@@ -4,8 +4,12 @@ import copy
 import pytest
 import simpy
 
-from satsim.cosim.policies import MAX_INFLIGHT, MAX_MIG_PER_REQ, make_policy
-from satsim.cosim.run import apply_rebalance_invariants, run_one
+from types import SimpleNamespace
+
+import yaml
+
+from satsim.cosim.policies import MAX_INFLIGHT, MAX_MIG_PER_REQ, ContactAware, make_policy
+from satsim.cosim.run import apply_rebalance_invariants, load_config, run_one
 from satsim.cosim.trace import Trace
 
 
@@ -61,6 +65,8 @@ def test_invariants_are_injected_into_every_migration_form():
     specs = [
         {"policy": "thermal_rebalance", "placement": {"policy": "greedy"}},
         {"policy": "torch_rebalance", "placement": {"policy": "greedy"}},
+        {"policy": "reactive"},
+        {"policy": "contact_aware"},
         {"place": "nearest", "migrate": "reactive"},
         {"place": "nearest", "migrate": "contact_aware"},
     ]
@@ -80,6 +86,36 @@ def test_explicit_conflict_is_an_error_not_a_silent_override():
     spec = {"policy": "torch_rebalance", "placement": {"policy": "greedy"}, "max_inflight": 12}
     with pytest.raises(ValueError, match="conflicts"):
         apply_rebalance_invariants({"rebalance_invariants": INVARIANTS}, spec)
+
+
+def test_explicit_conflict_in_composite_form_is_an_error():
+    spec = {"place": "nearest", "migrate": "reactive", "max_inflight": 12}
+    with pytest.raises(ValueError, match="conflicts"):
+        apply_rebalance_invariants({"rebalance_invariants": INVARIANTS}, spec)
+
+
+def test_contact_aware_interval_supersedes_every_gate():
+    # At t=5 the legacy every=2 gate would skip this tick; an explicit interval must replan.
+    w = SimpleNamespace(env=SimpleNamespace(now=5.0), tr=SimpleNamespace(compute=[]), nodes={})
+    policy = ContactAware(every=2, interval_s=5.0, max_inflight=0)
+    policy.rebalance(w)
+    assert policy.next_plan == pytest.approx(10.0)
+
+
+def test_load_config_skips_horizon_warning_when_trace_has_no_horizon(tmp_path):
+    cfg = copy.deepcopy(CFG)
+    cfg.update(
+        name="t3-no-horizon",
+        trace="trace.json",
+        scenario="scenario.json",
+        policies={},
+        seeds=[1],
+    )
+    cfg["slo"]["long_deadline_s"] = 900
+    (tmp_path / "trace.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "scenario.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "config.yaml").write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    assert load_config(tmp_path / "config.yaml")["name"] == "t3-no-horizon"
 
 
 def test_non_invariant_policy_is_left_alone():

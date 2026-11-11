@@ -45,7 +45,7 @@ def apply_rebalance_invariants(cfg: dict, spec: dict) -> dict:
         raise ValueError("rebalance_invariants must be a mapping")
     out = copy.deepcopy(spec)
     kind = out.get("policy")
-    if kind in _INVARIANT_TARGETS:
+    if kind in _INVARIANT_TARGETS or kind in _INVARIANT_MIGRATORS:
         accepts = True
     elif "place" in out:
         accepts = out.get("migrate", "none") in _INVARIANT_MIGRATORS
@@ -83,15 +83,17 @@ def load_config(path: Path, overrides: list[str] = ()) -> dict:
     long_deadline_s = cfg["slo"].get("long_deadline_s")
     if long_deadline_s is not None:
         trace_path = (Path(cfg["_dir"]) / cfg["trace"]).resolve()
-        horizon_s = float(json.loads(trace_path.read_text(encoding="utf-8"))["horizon_s"])
-        arrival_window_s = float(cfg["workload"]["arrival_window_s"])
-        if horizon_s - arrival_window_s < float(long_deadline_s):
-            print(
-                "warning: trace horizon minus arrival_window_s is shorter than long_deadline_s; "
-                "long requests may not have time to finish and the all-request P95 may be "
-                "dominated by censoring",
-                file=sys.stderr,
-            )
+        horizon = json.loads(trace_path.read_text(encoding="utf-8")).get("horizon_s")
+        if horizon is not None:
+            horizon_s = float(horizon)
+            arrival_window_s = float(cfg["workload"]["arrival_window_s"])
+            if horizon_s - arrival_window_s < float(long_deadline_s):
+                print(
+                    "warning: trace horizon minus arrival_window_s is shorter than long_deadline_s; "
+                    "long requests may not have time to finish and the all-request P95 may be "
+                    "dominated by censoring",
+                    file=sys.stderr,
+                )
     return cfg
 
 
