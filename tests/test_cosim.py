@@ -240,3 +240,30 @@ def test_torch_rebalance_migrates_out_of_umbra_and_supports_agentic_tether():
     assert r2.node == 2
     assert r2.reaccess_done == 3
     assert r2.tether_bytes > 0 and r2.tether_s > 0
+
+
+def test_dispatch_baselines_rr_nearest_random():
+    tr = toy_trace()
+    cfg = copy.deepcopy(CFG)
+
+    # Round-Robin alternates between reachable compute nodes 1 and 2
+    env = simpy.Environment()
+    w_rr = CoWorld(env, tr, cfg, make_policy({"place": "rr", "migrate": "none"}))
+    r1 = CRequest(0, 0, 10.0, False, 500, 200, 1e6, 1e9)
+    r2 = CRequest(1, 0, 11.0, False, 500, 200, 1e6, 1e9)
+    r3 = CRequest(2, 0, 12.0, False, 500, 200, 1e6, 1e9)
+    for r in (r1, r2, r3):
+        w_rr.submit(r)
+    env.run(until=tr.horizon)
+    assert [r1.trail[0], r2.trail[0], r3.trail[0]] == [1, 2, 1]
+
+    # Nearest always picks 1-hop node 1 over 2-hop node 2 when KV fits
+    env2 = simpy.Environment()
+    w_near = CoWorld(env2, tr, cfg, make_policy({"place": "nearest", "migrate": "none"}))
+    n1 = CRequest(0, 0, 10.0, False, 500, 200, 1e6, 1e9)
+    n2 = CRequest(1, 0, 11.0, False, 500, 200, 1e6, 1e9)
+    w_near.submit(n1)
+    w_near.submit(n2)
+    env2.run(until=tr.horizon)
+    assert [n1.trail[0], n2.trail[0]] == [1, 1]
+

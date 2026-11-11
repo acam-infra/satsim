@@ -35,6 +35,35 @@ def candidates(w, r) -> list[int]:
     return [j for j in w.tr.compute if w.tr.connected(r.origin, j, t) and w.fits(j, r)]
 
 
+_HOP_CACHE: dict[tuple[int, int, int], list[int]] = {}
+
+
+def hop_count(w, origin: int, j: int, t: float | None = None) -> int:
+    """ISL hop count from origin to j at time t (cached single-source BFS per epoch)."""
+    now = w.env.now if t is None else t
+    ep = w.tr.epoch_index(now)
+    key = (id(w.tr), origin, ep)
+    dists = _HOP_CACHE.get(key)
+    if dists is None:
+        adj = w.tr.adjacency(now)
+        dists = [999999] * w.tr.n
+        dists[origin] = 0
+        q = [origin]
+        idx = 0
+        while idx < len(q):
+            u = q[idx]
+            idx += 1
+            if u != origin and w.tr.role[u] == "rs":
+                continue
+            du = dists[u] + 1
+            for v, _ in adj[u]:
+                if dists[v] == 999999:
+                    dists[v] = du
+                    q.append(v)
+        _HOP_CACHE[key] = dists
+    return dists[j]
+
+
 def predict_decode_end(w, j: int, r, t0: float, remaining: float, *, joining: bool) -> float:
     """When r would finish decoding on j starting at t0, with j's current load held fixed."""
     extra = r if joining else None
@@ -150,7 +179,84 @@ def upload_options(w, r):
             yield j, duration
 
 
-class Nearest(Greedy):
+
+class RoundRobinPlacer:
+    """Cyclic round-robin over reachable compute nodes; blind to queue load and umbra state."""
+
+    id = "rr"
+
+    def __init__(self):
+        self._last = -1
+
+    def place(self, w, r):
+        cs = candidates(w, r)
+        if not cs:
+            return None
+        higher = [j for j in cs if j > self._last]
+        pick = higher[0] if higher else cs[0]
+        self._last = pick
+        return pick
+
+    def rebalance(self, w) -> None:
+        return
+
+
+class Nearest:
+    """Shortest-hop (access-local) placement from the origin RS satellite; RR tie-breaking."""
+
+    id = "nearest"
+
+    def __init__(self, tie: str = "rr"):
+        self.tie = tie
+        self._last = -1
+
+    def place(self, w, r):
+        cs = candidates(w, r)
+        if not cs:
+            return None
+        t = w.env.now
+        hops = {j: hop_count(w, r.origin, j, t) for j in cs}
+        min_h = min(hops.values())
+        best = [j for j in cs if hops[j] == min_h]
+        if self.tie == "id" or len(best) == 1:
+            pick = best[0]
+        else:
+            higher = [j for j in best if j > self._last]
+            pick = higher[0] if higher else best[0]
+        self._last = pick
+        return pick
+
+    def rebalance(self, w) -> None:
+        return
+
+
+class RandomPlace:
+    """Uniform random placement across reachable compute nodes."""
+
+    id = "random"
+
+    def place(self, w, r):
+        cs = candidates(w, r)
+        return w.rng.choice(cs) if cs else None
+
+    def rebalance(self, w) -> None:
+        return
+
+
+class LeastLoaded:
+    """Join-Shortest-Queue (JSQ): fewest active requests, blind to umbra power throttling."""
+
+    id = "least_loaded"
+
+    def place(self, w, r):
+        cs = candidates(w, r)
+        return min(cs, key=lambda j: (len(w.nodes[j]), w.kv_used(j), j)) if cs else None
+
+    def rebalance(self, w) -> None:
+        return
+
+
+class NearestUpload(Greedy):
     def place(self, w, r):
         best = min(upload_options(w, r), key=lambda x: (x[1], x[0]), default=None)
         return best[0] if best else None
@@ -369,7 +475,59 @@ class RoundRobin(Greedy):
         return
 
 
+
+class CompositePolicy:
+    """Orthogonal composition of any Placer (place) and any Migrator (rebalance)."""
+
+    def __init__(self, placer, migrator=None):
+        self.placer = placer
+        self.migrator = migrator
+        self.id = f"{placer.id}+{migrator.id}" if migrator is not None else placer.id
+
+    def place(self, w, r):
+        return self.placer.place(w, r)
+
+    def rebalance(self, w) -> None:
+        if self.migrator is not None:
+            self.migrator.rebalance(w)
+
+
+PLACERS = {
+    "rr": RoundRobinPlacer,
+    "round_robin": RoundRobinPlacer,
+    "nearest": Nearest, "nearest_upload": NearestUpload, "rr": RoundRobinPlacer,
+    "random": RandomPlace,
+    "least_loaded": LeastLoaded,
+    "jsq": LeastLoaded,
+    "greedy": Greedy,
+    "ephemeris": Ephemeris,
+}
+
+MIGRATORS = {
+    "none": None,
+    "reactive": Reactive,
+    "contact_aware": ContactAware,
+}
+
+POLICIES = {
+    **PLACERS,
+    "reactive": Reactive,
+    "contact_aware": ContactAware,
+}
+
 def make_policy(spec: dict):
+    if "place" in spec:
+        p_kind = spec["place"]
+        m_kind = spec.get("migrate", "none")
+        if p_kind not in PLACERS:
+            raise ValueError(f"unknown placer {p_kind!r}; one of {sorted(PLACERS)}")
+        if m_kind not in MIGRATORS:
+            raise ValueError(f"unknown migrator {m_kind!r}; one of {sorted(MIGRATORS)}")
+        p_kw = spec.get("place_kwargs", {})
+        m_kw = {k: v for k, v in spec.items() if k not in ("policy", "place", "migrate", "place_kwargs")}
+        placer = PLACERS[p_kind](**p_kw)
+        migrator = MIGRATORS[m_kind](**m_kw) if MIGRATORS[m_kind] is not None else None
+        return CompositePolicy(placer, migrator)
     kind = spec["policy"]
     kw = {k: v for k, v in spec.items() if k != "policy"}
     if kind == "thermal_rebalance":
