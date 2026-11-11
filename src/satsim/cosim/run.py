@@ -26,6 +26,43 @@ from satsim.cosim.world import CoWorld, make_requests
 
 REQUIRED = {"name", "trace", "scenario", "model", "gpu", "power", "net", "migration", "workload",
             "slo", "delivery", "control_period_s", "policies", "seeds"}
+REBALANCE_INVARIANT_KEYS = ("interval_s", "max_inflight", "max_mig_per_req")
+_INVARIANT_TARGETS = {"thermal_rebalance", "torch_rebalance", "torch_lp"}
+_INVARIANT_MIGRATORS = {"reactive", "contact_aware"}
+
+
+def apply_rebalance_invariants(cfg: dict, spec: dict) -> dict:
+    """Inject the optional ``rebalance_invariants`` block into one policy spec.
+
+    The block belongs to the fair-comparison harness, not to a strategy: it is applied to every
+    strategy that owns migration quota. An explicit same-named value in the policy spec wins
+    only when it is already equal; a different value is an error rather than a silent override.
+    """
+    inv = cfg.get("rebalance_invariants")
+    if inv is None:
+        return spec
+    if not isinstance(inv, dict):
+        raise ValueError("rebalance_invariants must be a mapping")
+    out = copy.deepcopy(spec)
+    kind = out.get("policy")
+    if kind in _INVARIANT_TARGETS:
+        accepts = True
+    elif "place" in out:
+        accepts = out.get("migrate", "none") in _INVARIANT_MIGRATORS
+    else:
+        accepts = False
+    if not accepts:
+        return out
+    for key in REBALANCE_INVARIANT_KEYS:
+        if key not in inv:
+            continue
+        if key in out and out[key] != inv[key]:
+            raise ValueError(
+                f"rebalance_invariants.{key}={inv[key]!r} conflicts with policy spec value "
+                f"{out[key]!r} for {kind or out.get('place')}"
+            )
+        out[key] = inv[key]
+    return out
 
 
 def load_config(path: Path, overrides: list[str] = ()) -> dict:
@@ -63,6 +100,7 @@ def _resolve(cfg: dict, key: str) -> Path:
 
 
 def run_one(cfg: dict, trace: Trace, pol_spec: dict, seed: int, record: bool = False):
+    pol_spec = apply_rebalance_invariants(cfg, pol_spec)
     env = simpy.Environment()
     rec = Recorder(float(cfg.get("frame_s", 10.0))) if record else None
     w = CoWorld(env, trace, cfg, make_policy(pol_spec), recorder=rec, seed=seed)
