@@ -379,17 +379,36 @@ class OrbitLoad(Greedy):
 
         now = w.env.now
         forecast = ThermalForecast(w, j)
-        forecast.advance(now, upload_s, max(len(w.nodes[j]), 1))
+        # The node heats over the upload window from whatever is decoding on it right now. An idle
+        # node sits at P_idle (device_power(0) == P_idle), so pass the true count, not max(..., 1).
+        forecast.advance(now, upload_s, len(w.nodes[j]) + int(w.reserved[j] > 0))
         if self.thermal_mode == "rc_const":
             end = forecast.finish(start, batch, context, tokens)
             return INF if end == math.inf else w.tr.next_conn(r.origin, j, end)
 
-        kv_left = sorted(((_prior_remaining_s(w, x), x.kv) for x in w.nodes[j]))
+        # Residents plus any inbound upload still holding a slot; both drain, the reserved one at
+        # its own (unknown) rate, so give it the same prior treatment.
+        residents = [(_prior_remaining_s(w, x), x.kv) for x in w.nodes[j]]
+        if w.reserved[j] > 0:
+            # ``kv`` below is token-denominated everywhere else, so convert the byte reservation.
+            reserved_tok = w.reserved[j] / w.bpt
+            residents.append((reserved_tok, reserved_tok))
+        # Residents keep decoding while the new request uploads: discount that progress so the
+        # staircase starts from what is actually left on arrival.
+        if residents:
+            clock0 = w.thermal_f[j] if w.thermal is not None else 1.0
+            if w.tr.is_dark(j, now):
+                clock0 = min(clock0, w.f_dark)
+            iter0 = iter_time(max(len(residents), 1), sum(kv for _, kv in residents) + r.pin,
+                              clock0, w.gpu)
+            done = upload_s / iter0
+            residents = [(max(1.0, rt - done), kv) for rt, kv in residents]
+        kv_left = sorted(residents)
         t = start
         left = tokens
         while left > 0:
             batch = 1 + len(kv_left)
-            ctx = sum(kv for _, kv in kv_left) + r.pin + left / 2 + w.reserved[j] / w.bpt / 2
+            ctx = sum(kv for _, kv in kv_left) + r.pin + left / 2
             step_tok = min(left, kv_left[0][0]) if kv_left else left
             end = forecast.finish(t, batch, ctx, step_tok)
             if end == math.inf:

@@ -154,8 +154,8 @@ class ThermalForecast:
                     until_cross = model.tau_s * math.log(max(1.0, ratio))
                 step = min(min(end, target) - now, until_cross)
                 if step == until_cross:
-                    self.temp = boundary
                     self.throttled = not self.throttled
+                    self.temp = boundary + 1e-3 if self.throttled else boundary - 1e-3
                 else:
                     self.temp = equilibrium + (self.temp - equilibrium) * math.exp(-step / model.tau_s)
                 now += step

@@ -60,3 +60,23 @@ def test_plane_idx_shares_survive_ltan_collapse():
     assert row["plane_shares"].keys() == {"LTAN06.0h"}, "LTAN tag collapses as expected"
     assert set(row["plane_idx_shares"]) == {"p0", "p1"}
     assert abs(sum(row["plane_idx_shares"].values()) - 1.0) < 1e-9
+
+
+def test_thermal_forecast_advance_idle_node_stays_cool():
+    """An idle node advances at P_idle; a 4-deep batch crosses the 84 C wall in the same window."""
+    from satsim.cosim.thermal_rebalance import ThermalForecast
+
+    cfg = load_config(__import__("pathlib").Path(__file__).resolve().parents[1]
+                      / "configs" / "cosim_hotspot_stress_v1.yaml")
+    trace = synth_multi_sso(compute_ltans=(6.0,), sats_per_plane=4, horizon_s=1200.0, dt_s=10.0)
+    cfg = copy.deepcopy(cfg)
+    cfg["workload"]["arrival_window_s"] = 1200
+    env = simpy.Environment()
+    w = CoWorld(env, trace, cfg, make_policy({"policy": "nearest"}), seed=1)
+    node = trace.compute[0]
+    idle = ThermalForecast(w, node)
+    idle.advance(0.0, 900.0, 0)
+    busy = ThermalForecast(w, node)
+    busy.advance(0.0, 900.0, 4)
+    assert idle.temp < busy.temp
+    assert idle.temp < cfg["thermal"]["T_throttle_C"]
