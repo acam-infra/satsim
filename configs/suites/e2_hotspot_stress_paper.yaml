@@ -1,0 +1,39 @@
+# E2: Paper storyline benchmark on calibrated regional hotspot stress (Stage-1 breakdown & ceiling vs
+# Stage-2 runtime migration to sunlit cool satellites under unified rebalance_invariants: 5s / 24 / 4).
+# Sweeps slo.deadline_factor_long across [1.5, 1.6, 1.8] (tight / standard tactical / relaxed) over
+# 5 paired seeds (11-15), reporting paired deltas relative to the strongest Stage-1 placer (orbit_thermal).
+name: e2_hotspot_stress_paper
+base: ../cosim_hotspot_stress_v1.yaml
+seeds: [11, 12, 13, 14, 15]
+set:
+  rebalance_invariants: {interval_s: 5.0, max_inflight: 24, max_mig_per_req: 4}
+axes:
+  slo.deadline_factor_long: [1.5, 1.6, 1.8]
+policies:
+  nearest: {policy: nearest}
+  round_robin: {policy: round_robin_all}
+  random: {policy: random}
+  orbit_thermal: {policy: orbit_thermal}
+  nearest+cool_aware: {place: nearest, migrate: cool_aware}
+  orbit_thermal+cool_aware: {place: orbit_thermal, migrate: cool_aware}
+  deadline_rc:
+    policy: thermal_rebalance
+    placement: {policy: orbit_load}
+    thermal_aware: rc
+  torch_lp:
+    policy: torch_rebalance
+    placement: {policy: orbit_load}
+    viable_slack_s: 0.0
+report:
+  baseline: orbit_thermal
+  metrics:
+    - good_long_frac
+    - goodput_tok_s
+    - badput_tok_s
+    - waste_ratio
+    - long_p95_all_s
+    - throttle_s
+    - migrations
+    - mig_abort
+    - mig_GB
+jobs: 6

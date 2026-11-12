@@ -24,6 +24,7 @@ class MilpVerifiedTorch(TorchRebalance):
         self.var_counts = []
         self.exact_match = 0
         self.total_solves = 0
+        self.mismatches = []
 
     def _solve_assignment(self, w, candidates, free_slots, edge_users, budget, now, urgent_relay):
         t0 = time.perf_counter()
@@ -52,48 +53,40 @@ class MilpVerifiedTorch(TorchRebalance):
                     rows.append(row_idx); cols.append(i); vals.append(1.0)
                 ub.append(1.0); row_idx += 1
 
-        # (C2) Source 1-to-Many fan-out capacity
+        # (C2) Source 1-to-Many fan-out capacity: bounded only by resident requests
         by_src = {}
         for i, c in enumerate(candidates):
             by_src.setdefault(c["src"], []).append(i)
         for src, idxs in by_src.items():
-            is_urgent = w.tr.is_dark(src, now) or w.thermal_f[src] < 1.0
-            cap_s = min(self.max_src_out if is_urgent else 2, len(w.nodes[src]))
+            cap_s = len(w.nodes[src])
             if len(idxs) > cap_s:
                 for i in idxs:
                     rows.append(row_idx); cols.append(i); vals.append(1.0)
                 ub.append(float(cap_s)); row_idx += 1
 
-        # (C3) Destination thermal tipping-point & KV slot capacity
+        # (C3) Destination KV slot capacity: bounded only by physical free slots
         by_dst = {}
         for i, c in enumerate(candidates):
             by_dst.setdefault(c["dst"], []).append(i)
         for dst, idxs in by_dst.items():
-            dst_temp = w.thermal.temperature(dst) if w.thermal else 0.0
-            if urgent_relay:
-                safe_s = free_slots[dst]
-            else:
-                max_b = 2 if dst_temp >= 68.0 else 3
-                safe_s = max(1, min(free_slots[dst], max_b - len(w.nodes[dst])))
+            safe_s = free_slots[dst]
             if len(idxs) > safe_s:
                 for i in idxs:
                     rows.append(row_idx); cols.append(i); vals.append(1.0)
                 ub.append(float(safe_s)); row_idx += 1
 
-        # (C4) Shared multi-hop ISL edge bandwidth capacity (KV flow + raw-image tether flow)
+        # (C4) Shared multi-hop ISL edge bandwidth capacity (KV flow)
         by_edge = {}
         for i, c in enumerate(candidates):
             for e in c["path"][1]:
                 by_edge.setdefault(e, []).append((i, c["nbytes"]))
-            for e in c.get("tether_edges", ()):
-                by_edge.setdefault(e, []).append((i, c.get("tether_edge_bytes", 0.0)))
         for e, items in by_edge.items():
             if len(items) > 1:
-                max_b = max(max(nb for _, nb in items), w.net.cap[e] * 15.0 / (edge_users.get(e, 0) + 1))
+                edge_cap_e = max(max(nb for _, nb in items), w.net.cap[e] * 15.0 / (edge_users.get(e, 0) + 1))
                 for i, nb in items:
                     if nb > 0:
                         rows.append(row_idx); cols.append(i); vals.append(nb)
-                ub.append(max_b); row_idx += 1
+                ub.append(edge_cap_e); row_idx += 1
 
         if m > budget:
             for i in range(m):
@@ -120,6 +113,15 @@ class MilpVerifiedTorch(TorchRebalance):
         g_milp = sum(candidates[i]["gain"] for i in milp_sel)
         if abs(g_bnb - g_milp) / max(1e-6, abs(g_milp)) < 0.02:
             self.exact_match += 1
+        else:
+            if len(self.mismatches) < 3:
+                self.mismatches.append({
+                    "now": now,
+                    "g_bnb": g_bnb,
+                    "g_milp": g_milp,
+                    "abs_diff": abs(g_bnb - g_milp),
+                    "rel_diff": abs(g_bnb - g_milp) / max(1e-6, abs(g_milp)),
+                })
         return milp_sel
 
 
@@ -151,3 +153,11 @@ for use_milp, tag in [(True, "HiGHS_Exact_MILP"), (False, "Fast_BnB_Solver")]:
         f"solve_time: mean={mean_ms:.3f}ms, p99={p99_ms:.3f}ms | "
         f"opt_match={pol.exact_match}/{pol.total_solves} ({pol.exact_match/pol.total_solves*100:.1f}%)"
     )
+    if pol.mismatches:
+        print(f"  Top mismatch instances (first {len(pol.mismatches)}):")
+        for m_idx, m_info in enumerate(pol.mismatches):
+            print(
+                f"    [{m_idx+1}] t={m_info['now']:.1f}s: BnB={m_info['g_bnb']:.4f}, "
+                f"MILP={m_info['g_milp']:.4f}, diff={m_info['abs_diff']:.4f} "
+                f"({m_info['rel_diff']*100:.2f}%)"
+            )

@@ -1,0 +1,27 @@
+# T8 · E1: Stage-1 initial placement baselines on the uneven remote-sensing hotspot workload.
+# Sweep reserve_output_budget=[true, false]:
+# - true: base hard worst-case KV admission cap (~4 long requests/node), which forces spillover early;
+# - false: dynamic prompt-KV admission, exposing local hotspot pile-up, thermal throttling, and badput.
+name: e1_stage1_hotspot
+base: ../cosim_hotspot_v1.yaml
+seeds: [1, 2, 3, 4, 5]
+axes:
+  workload.reserve_output_budget: [true, false]
+policies:
+  round_robin: {policy: round_robin_all}
+  round_robin_sunlit: {policy: round_robin}
+  nearest: {policy: nearest}
+  random: {policy: random}
+  orbit_thermal: {policy: orbit_load}
+report:
+  baseline: round_robin
+  metrics:
+    - good_long_frac
+    - goodput_tok_s
+    - badput_tok_s
+    - waste_ratio
+    - e2e_p95_all_s
+    - long_p95_all_s
+    - undelivered_frac
+    - throttle_s
+jobs: 4

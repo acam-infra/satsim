@@ -1,0 +1,26 @@
+# T8 · E3: Compute-vs-communication trade-off across synchronized ISL bandwidths with tail Delta-KV enabled.
+name: e3_bw_kv_sweep
+base: ../cosim_placement_thermal.yaml
+seeds: [11, 12, 13, 14, 15]
+set:
+  migration.delta_kv: true
+  rebalance_invariants: {interval_s: 5.0, max_inflight: 24, max_mig_per_req: 4}
+axes:
+  "net.link_gbps.intra,net.link_gbps.inter": [10.0, 3.0, 1.0, 0.3]
+policies:
+  nearest+none: {place: nearest, migrate: none}
+  nearest+reactive: {place: nearest, migrate: reactive}
+  nearest+cool_aware: {place: nearest, migrate: cool_aware}
+report:
+  baseline: nearest+none
+  metrics:
+    - good_long_frac
+    - goodput_tok_s
+    - badput_tok_s
+    - waste_ratio
+    - long_p95_all_s
+    - migrations
+    - mig_abort
+    - mig_GB
+    - delta_kv_GB
+jobs: 4
