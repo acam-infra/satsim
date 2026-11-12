@@ -64,6 +64,12 @@ def summarize(w: CoWorld) -> dict:
     gap = [r.t_delivered - r.t_decoded for r in delivered]
     tok = sum(r.gen for r in rs)
     window = float(w.cfg["workload"]["arrival_window_s"])
+    bad = [r for r in rs if not w.good(r)]
+    badput_gen = sum(r.gen for r in bad)
+    goodput_gen = sum(r.gen for r in good)
+    horizon = w.tr.horizon
+    lat_all = [r.t_delivered - r.t if r.t_delivered is not None else horizon - r.t for r in rs]
+    lat_long_all = [r.t_delivered - r.t if r.t_delivered is not None else horizon - r.t for r in longs]
     return {
         "n_req": len(rs),
         "n_long": len(longs),
@@ -84,6 +90,12 @@ def summarize(w: CoWorld) -> dict:
         "mig_GB": w.acc["mig_bytes"] / 1e9,
         "upload_fail": w.acc["upload_fail"],
         "link_GB_hops": w.net.bytes_hops / 1e9,
+        "badput_tok_s": badput_gen / window,
+        "waste_ratio": badput_gen / (goodput_gen + badput_gen) if goodput_gen + badput_gen > 0 else 0.0,
+        "undelivered_frac": sum(1 for r in rs if r.t_delivered is None) / max(1, len(rs)),
+        "e2e_p95_all_s": _pct(lat_all, 95),
+        "long_p95_all_s": _pct(lat_long_all, 95),
+        "throttle_s": float(w.acc.get("throttle_s", 0.0)),
     }
 
 

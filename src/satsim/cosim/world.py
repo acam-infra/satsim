@@ -112,7 +112,7 @@ class CoWorld:
         self.reserved = {j: 0.0 for j in trace.compute}  # KV bytes of inbound uploads / migrations
         self.reqs: list[CRequest] = []
         self.topo_event = env.event()
-        self.acc = dict(mig=0, mig_abort=0, mig_bytes=0.0, upload_fail=0)
+        self.acc = dict(mig=0, mig_abort=0, mig_bytes=0.0, upload_fail=0, throttle_s=0.0)
         thermal_cfg = cfg.get("thermal")
         self.thermal = DynamicThermal({**cfg["power"], **thermal_cfg}, n=trace.n) if thermal_cfg else None
         self.thermal_f = [self.thermal.clock_factor(j, 0.0) if self.thermal else 1.0 for j in range(trace.n)]
@@ -124,6 +124,24 @@ class CoWorld:
     def f_of(self, j: int, t: float | None = None) -> float:
         orbital_f = self.f_dark if self.tr.is_dark(j, self.env.now if t is None else t) else 1.0
         return min(orbital_f, self.thermal_f[j])
+
+    def thermal_headroom_C(self, j: int) -> float:
+        """Temperature margin before the thermal throttle threshold; infinite without a thermal model."""
+        if self.thermal is None:
+            return math.inf
+        return self.thermal.T_throttle_C - self.thermal.temperature(j)
+
+    def is_eclipse(self, j: int, t: float | None = None) -> bool:
+        """True while node ``j`` is in eclipse (the trace's ``is_dark`` state)."""
+        return self.tr.is_dark(j, self.env.now if t is None else t)
+
+    def is_hot(self, j: int) -> bool:
+        """True while node ``j`` is thermally throttled."""
+        return self.thermal_f[j] < 1.0
+
+    def is_cool(self, j: int, margin_C: float) -> bool:
+        """True when node ``j`` is not throttled and has at least ``margin_C`` of headroom."""
+        return not self.is_hot(j) and self.thermal_headroom_C(j) >= margin_C
 
     def device_power(self, batch: int, f: float) -> float:
         """Idle plus a saturating batch-dependent fraction of the DVFS dynamic power."""
@@ -141,6 +159,8 @@ class CoWorld:
             previous = self.f_of(j)
             self.thermal_f[j] = self.thermal.clock_factor(j, now)
             current = self.f_of(j)
+            if self.thermal_f[j] < 1.0:
+                self.acc["throttle_s"] += self.period
             if current != previous:
                 self.poke(j)
             self.thermal_power_w[j] = self.device_power(len(self.nodes[j]), current)

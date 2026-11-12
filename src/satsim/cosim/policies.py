@@ -314,12 +314,22 @@ class OrbitLoad(Greedy):
 class Reactive(Greedy):
     id = "reactive"
 
-    def __init__(self, speedup: float = 1.3):
+    def __init__(self, speedup: float = 1.3, max_inflight: int | None = None,
+                 max_mig_per_req: int | None = None, interval_s: float | None = None):
         self.speedup = speedup
+        self.max_inflight = MAX_INFLIGHT if max_inflight is None else int(max_inflight)
+        self.max_mig_per_req = MAX_MIG_PER_REQ if max_mig_per_req is None else int(max_mig_per_req)
+        self.interval_s = interval_s
+        self.next_plan = float(interval_s) if interval_s is not None else 0.0
 
     def rebalance(self, w) -> None:
-        t = w.env.now
-        budget = MAX_INFLIGHT - inflight(w)
+        now = w.env.now
+        if self.interval_s is not None:
+            if now < self.next_plan:
+                return
+            self.next_plan = now + float(self.interval_s)
+        t = now
+        budget = self.max_inflight - inflight(w)
         for j in w.tr.compute:
             if budget <= 0:
                 return
@@ -328,7 +338,7 @@ class Reactive(Greedy):
                 if budget <= 0:
                     return
                 lost = w.stream and not w.tr.connected(r.origin, j, t)
-                if not (dark or lost) or r.migrating or r.n_mig >= MAX_MIG_PER_REQ or r.remaining < 200:
+                if not (dark or lost) or r.migrating or r.n_mig >= self.max_mig_per_req or r.remaining < 200:
                     continue
                 here = w.iter_of(j)
                 best, best_it = None, here / self.speedup
@@ -354,18 +364,26 @@ class ContactAware(Ephemeris):
     tick, and destinations with an inbound migration in flight are skipped, so a lit satellite is
     not flooded by every request that sees it at once. ``externality=False`` gives the v1 policy
     that scores the mover alone (it over-migrates under load; see docs/notes).
+
+    ``interval_s``, when supplied by ``rebalance_invariants``, is the single cadence gate and
+    supersedes the legacy ``every`` tick gate so all migration strategies replan on the same clock.
     """
 
     id = "contact_aware"
 
     def __init__(self, margin_s: float = 20.0, margin_frac: float = 0.1, every: int = 2, max_hops: int = 6,
-                 externality: bool = True):
+                 externality: bool = True, max_inflight: int | None = None,
+                 max_mig_per_req: int | None = None, interval_s: float | None = None):
         self.margin_s = margin_s
         self.margin_frac = margin_frac
         self.every = every
         self.max_hops = max_hops
         self.externality = externality
         self._tick = 0
+        self.max_inflight = MAX_INFLIGHT if max_inflight is None else int(max_inflight)
+        self.max_mig_per_req = MAX_MIG_PER_REQ if max_mig_per_req is None else int(max_mig_per_req)
+        self.interval_s = interval_s
+        self.next_plan = float(interval_s) if interval_s is not None else 0.0
 
     @staticmethod
     def _others_delay(w, j: int, exclude, d_it: float) -> float:
@@ -373,17 +391,22 @@ class ContactAware(Ephemeris):
 
     def rebalance(self, w) -> None:
         self._tick += 1
-        if self._tick % self.every:
+        if self.interval_s is None and self.every and self._tick % self.every:
             return
-        t = w.env.now
-        budget = MAX_INFLIGHT - inflight(w)
+        now = w.env.now
+        if self.interval_s is not None:
+            if now < self.next_plan:
+                return
+            self.next_plan = now + float(self.interval_s)
+        t = now
+        budget = self.max_inflight - inflight(w)
         if budget <= 0:
             return
         inbound = {j for j in w.tr.compute if w.reserved[j] > 0}
         moves = []
         for j in w.tr.compute:
             for r in w.nodes[j]:
-                if r.migrating or r.n_mig >= MAX_MIG_PER_REQ or r.remaining < 200:
+                if r.migrating or r.n_mig >= self.max_mig_per_req or r.remaining < 200:
                     continue
                 stay = predicted_cost(w, j, r, t, r.remaining, joining=False)
                 if not self._at_risk(w, j, r, t, stay):
