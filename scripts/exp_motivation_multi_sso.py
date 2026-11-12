@@ -101,11 +101,9 @@ def run_policy_seeds(trace: Trace, cfg: dict, pol_spec: dict, seeds: list[int]) 
 
     mean_row: dict = {}
     for k in rows[0]:
-        if k == "plane_shares":
-            all_planes = sorted({p for r in rows for p in r["plane_shares"]})
-            mean_row["plane_shares"] = {
-                p: st.fmean([r["plane_shares"].get(p, 0.0) for r in rows]) for p in all_planes
-            }
+        if isinstance(rows[0][k], dict):
+            all_keys = sorted({p for r in rows for p in r[k]})
+            mean_row[k] = {p: st.fmean([r[k].get(p, 0.0) for r in rows]) for p in all_keys}
         elif isinstance(rows[0][k], (int, float)):
             vals = [r[k] for r in rows if r[k] is not None]
             mean_row[k] = st.fmean(vals) if vals else 0.0
@@ -159,17 +157,28 @@ def main() -> None:
     ap.add_argument("--rate", type=float, default=12.0, help="requests per RS per min for main table")
     ap.add_argument("--sweep-rates", default="6,10,14,18", help="comma-separated rates for load sweep")
     ap.add_argument("--out", default="runs/motivation_multi_sso/summary.json")
+    ap.add_argument("--ltans", default="10.5,13.5,6.0",
+                    help="comma-separated compute-plane LTANs; one plane per entry")
+    ap.add_argument("--sats-per-plane", type=int, default=10)
+    ap.add_argument("--p-dark", type=float, default=80.0,
+                    help="eclipse power cap (W); 300 keeps f_dark=1.0 for the no-derate counterfactual")
+    ap.add_argument("--min-deadline-s", type=float, default=120.0)
+    ap.add_argument("--policies", default="", help="comma-separated subset of POLICIES keys")
     args = ap.parse_args()
 
     seeds = [int(s) for s in args.seeds.split(",") if s.strip()]
+    ltans = tuple(float(x) for x in args.ltans.split(",") if x.strip())
+    policies = (
+        {k: POLICIES[k] for k in args.policies.split(",") if k.strip()} if args.policies else POLICIES
+    )
     t0 = time.perf_counter()
     print(
-        "1. 正在内存即时合成 Multi-SSO 异构星座轨迹 (LTAN 10:30, 13:30 影轨 + LTAN 06:00 晨昏全亮轨, 3×10 星)...",
+        f"1. 正在内存即时合成 Multi-SSO 星座轨迹 (LTAN {ltans} × {args.sats_per_plane} 星/面)...",
         flush=True,
     )
     trace = synth_multi_sso(
-        compute_ltans=(10.5, 13.5, 6.0),
-        sats_per_plane=10,
+        compute_ltans=ltans,
+        sats_per_plane=args.sats_per_plane,
         compute_alt_km=550.0,
         inter_mode="grid",
         inter_range_km=5000.0,
@@ -178,18 +187,28 @@ def main() -> None:
         dt_s=5.0,
     )
     st_info = trace.raw_stats
+    dark_by_plane: dict[int, list[float]] = {}
+    for j in trace.compute:
+        p = int(trace.nodes[j].get("plane", -1))
+        dark_by_plane.setdefault(p, []).append(sum(b - a for a, b in trace.dark[j]) / 7200.0)
     print(
-        f"   合成完成 ({time.perf_counter() - t0:.2f}s): {len(trace.rs)} 颗遥感星 + {len(trace.compute)} 颗算力星 (3×10), "
-        f"全网整体影时占比={100 * st_info['compute_dark_share']:.1f}% "
-        f"(其中 LTAN 10:30/13:30 约 36% 进影, LTAN 06:00 晨昏轨 0% 进影)",
+        f"   合成完成 ({time.perf_counter() - t0:.2f}s): {len(trace.rs)} 颗遥感星 + "
+        f"{len(trace.compute)} 颗算力星 ({len(ltans)} 面 × {args.sats_per_plane}), "
+        f"全网影时占比={100 * st_info['compute_dark_share']:.1f}% "
+        f"各面影时={ {p: round(sum(v) / len(v), 3) for p, v in dark_by_plane.items()} } "
+        f"inter_up={st_info['kinds'].get('inter', {}).get('mean_up_edges', 0.0):.1f} "
+        f"rs_up={st_info['kinds'].get('rs', {}).get('mean_up_edges', 0.0):.2f}",
         flush=True,
     )
 
     cfg = default_cfg()
     cfg["workload"]["rate_per_rs_per_min"] = args.rate
-    print(f"\n2. 运行主实验 (rate={args.rate}/min/RS, seeds={seeds})...", flush=True)
+    cfg["power"]["P_dark"] = args.p_dark
+    cfg["slo"]["min_deadline_s"] = args.min_deadline_s
+    print(f"\n2. 运行主实验 (rate={args.rate}/min/RS, seeds={seeds}, P_dark={args.p_dark}, "
+          f"min_deadline_s={args.min_deadline_s})...", flush=True)
     main_results: dict[str, dict] = {}
-    for name, spec in POLICIES.items():
+    for name, spec in policies.items():
         ts = time.perf_counter()
         main_results[name] = run_policy_seeds(trace, cfg, spec, seeds)
         r = main_results[name]
@@ -207,7 +226,7 @@ def main() -> None:
     sweep_results: dict[str, dict[str, dict]] = {}
     if sweep_rates:
         print(f"\n=== 表 3: 不同计算负载强度下的长任务达标率扫描 (seeds={seeds[:2]}) ===", flush=True)
-        pol_names = list(POLICIES.keys())
+        pol_names = list(policies.keys())
         hdr = f"{'Rate(/min/RS)':<14} | " + " | ".join(f"{p:>13}" for p in pol_names)
         print(hdr, flush=True)
         print("-" * len(hdr), flush=True)
@@ -216,7 +235,7 @@ def main() -> None:
             scfg["workload"]["rate_per_rs_per_min"] = rate
             sweep_results[str(rate)] = {}
             cells = []
-            for p_name, spec in POLICIES.items():
+            for p_name, spec in policies.items():
                 res = run_policy_seeds(trace, scfg, spec, seeds[:2])
                 sweep_results[str(rate)][p_name] = res
                 cells.append(f"{100 * res['good_long_frac']:>12.1f}%")
@@ -224,10 +243,22 @@ def main() -> None:
 
     out_path = ROOT / args.out
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(
-        json.dumps({"main": main_results, "sweep": sweep_results}, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    payload = {
+        "config": {
+            "ltans": list(ltans),
+            "sats_per_plane": args.sats_per_plane,
+            "rate": args.rate,
+            "p_dark": args.p_dark,
+            "min_deadline_s": args.min_deadline_s,
+            "seeds": seeds,
+            "horizon_s": 7200.0,
+            "compute_dark_share": st_info["compute_dark_share"],
+            "kinds": st_info["kinds"],
+        },
+        "main": main_results,
+        "sweep": sweep_results,
+    }
+    out_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"\n结果已写入: {out_path}")
 
 

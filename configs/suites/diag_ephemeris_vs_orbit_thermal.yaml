@@ -1,0 +1,31 @@
+# LAB-1842 · A: single-variable ladder from star-blind placement to the simulator's own RC
+# integration, on the E2 hotspot scenario. Every rung keeps upload ETA, the output-length
+# prior, the inbound `reserved` KV and the eclipse segments identical; only the sunlit clock
+# differs. Paired over 5 seeds and three long-request SLO factors.
+name: diag_ephemeris_vs_orbit_thermal
+base: ../cosim_hotspot_stress_v1.yaml
+seeds: [11, 12, 13, 14, 15]
+set:
+  rebalance_invariants: {interval_s: 5.0, max_inflight: 24, max_mig_per_req: 4}
+axes:
+  slo.deadline_factor_long: [1.5, 1.6, 1.8]
+policies:
+  nearest: {policy: nearest}
+  ephemeris: {policy: ephemeris}
+  orbit_load_nothermal: {policy: orbit_load, thermal_aware: false}
+  orbit_hot_only: {policy: orbit_load, thermal_aware: hot_only}
+  orbit_thermal: {policy: orbit_thermal}
+  orbit_thermal_rc: {policy: orbit_load, thermal_aware: rc}
+report:
+  baseline: orbit_load_nothermal
+  metrics:
+    - good_long_frac
+    - goodput_tok_s
+    - badput_tok_s
+    - waste_ratio
+    - long_p95_all_s
+    - throttle_s
+    - migrations
+    - mig_abort
+    - mig_GB
+jobs: 4

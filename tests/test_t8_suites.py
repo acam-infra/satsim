@@ -16,6 +16,7 @@ SUITES = (
     "e2_hotspot_stress_paper.yaml",
     "e3_bw_kv_sweep.yaml",
     "e4_fair_quota.yaml",
+    "diag_ephemeris_vs_orbit_thermal.yaml",
 )
 
 

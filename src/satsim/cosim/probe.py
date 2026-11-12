@@ -82,6 +82,13 @@ def analyze_run(w: CoWorld, probe: LoadProbe) -> dict:
     n_adm = max(1, len(admitted))
     plane_shares = {k: v / n_adm for k, v in sorted(plane_counts.items())}
 
+    # Same dispatch share keyed by the integer plane index. ``cluster`` tags are derived from
+    # LTAN, so two syntactic planes sharing an LTAN collapse into one key; the index does not.
+    plane_idx_counts: dict[str, int] = defaultdict(int)
+    for r in admitted:
+        plane_idx_counts[f"p{int(tr.nodes[r.trail[0]].get('plane', -1))}"] += 1
+    plane_idx_shares = {k: v / n_adm for k, v in sorted(plane_idx_counts.items())}
+
     # Node queue averages over arrival window
     ns = max(1, probe.n_samples)
     node_q_means = [probe.node_q_sum[j] / ns for j in tr.compute]
@@ -110,6 +117,7 @@ def analyze_run(w: CoWorld, probe: LoadProbe) -> dict:
         "eclipsed_plane_disp_frac": admit_eclipsed_plane / n_adm,
         "sunlit_plane_disp_frac": admit_sunlit_plane / n_adm,
         "plane_shares": plane_shares,
+        "plane_idx_shares": plane_idx_shares,
         # Queue buildup & spatial load imbalance
         "q_mean_all": st.fmean(node_q_means) if node_q_means else 0.0,
         "q_eclipsed_plane_mean": eclipsed_q_mean,

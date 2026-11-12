@@ -291,13 +291,31 @@ def thermal_service_clock(w, j, batch, tokens, context):
 
 
 class OrbitLoad(Greedy):
-    """One-shot placement with upload, an output-length prior, and a load/heat forecast."""
+    """One-shot placement with upload, an output-length prior, and a load/heat forecast.
+
+    ``thermal_aware`` selects how much of the heat model is used. It only changes the
+    clock the *candidate* is priced at; the orbit/eclipse segments, upload ETA, prior
+    length and inbound ``reserved`` KV are identical in every mode, so the modes form a
+    single-variable ladder from "star-blind" to "same RC integration as the simulator":
+
+    | mode        | id                 | sunlit clock                                   |
+    |-------------|--------------------|------------------------------------------------|
+    | ``False``   | ``orbit_load``     | ``1.0`` always (no heat at all)                |
+    | ``"hot_only"`` | ``orbit_hot_only`` | current ``thermal_f`` if already throttled, else ``1.0`` |
+    | ``True``    | ``orbit_thermal``  | ``thermal_service_clock`` (closed-form DVFS average) |
+    | ``"rc"``    | ``orbit_thermal_rc`` | ``ThermalForecast`` (stepwise RC, 84/76/0.55 hysteresis) |
+    """
 
     id = "orbit_load"
+    _IDS = {True: "orbit_thermal", False: "orbit_load", "hot_only": "orbit_hot_only",
+            "rc": "orbit_thermal_rc"}
 
-    def __init__(self, thermal_aware: bool = True):
+    def __init__(self, thermal_aware: bool | str = True):
+        if thermal_aware not in self._IDS:
+            raise ValueError(f"unknown thermal_aware {thermal_aware!r}; "
+                             f"one of {sorted(map(str, self._IDS))}")
         self.thermal_aware = thermal_aware
-        self.id = "orbit_thermal" if thermal_aware else "orbit_load"
+        self.id = self._IDS[thermal_aware]
 
     def place(self, w, r):
         bounds = w.cfg["workload"]["long_out" if r.long else "short_out"]
@@ -310,7 +328,17 @@ class OrbitLoad(Greedy):
         batch = len(w.nodes[j]) + 1 + int(w.reserved[j] > 0)
         context = sum(x.kv for x in w.nodes[j]) + r.pin + tokens / 2 + w.reserved[j] / w.bpt / 2
         start = w.env.now + upload_s
-        clock = thermal_service_clock(w, j, batch, tokens, context) if self.thermal_aware else 1.0
+        if self.thermal_aware == "rc" and w.thermal is not None:
+            from satsim.cosim.thermal_rebalance import ThermalForecast
+
+            end = ThermalForecast(w, j).finish(start, batch, context, tokens)
+            return INF if end == math.inf else w.tr.next_conn(r.origin, j, end)
+        if self.thermal_aware is False:
+            clock = 1.0
+        elif self.thermal_aware == "hot_only":
+            clock = w.thermal_f[j] if w.thermal is not None else 1.0
+        else:
+            clock = thermal_service_clock(w, j, batch, tokens, context)
         for a, b, dark in w.tr.power_segments(j, start):
             f = min(clock, w.f_dark) if dark else clock
             step = iter_time(batch, context, f, w.gpu)
