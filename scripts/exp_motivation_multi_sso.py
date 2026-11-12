@@ -86,8 +86,24 @@ POLICIES = {
     "contact_aware": {"policy": "contact_aware"},
 }
 
+# Heat-model rungs. Kept out of POLICIES so a bare run keeps the original table unchanged;
+# select them explicitly with --policies orbit_load,orbit_hot_only,orbit_thermal,orbit_thermal_rc
+# and turn the physical heat model on with --world-thermal dynamic.
+EXTRA_POLICIES = {
+    "orbit_load": {"policy": "orbit_load", "thermal_mode": "off"},
+    "orbit_hot_only": {"policy": "orbit_load", "thermal_mode": "hot_only"},
+    "orbit_thermal": {"policy": "orbit_thermal"},
+    "orbit_thermal_rc": {"policy": "orbit_load", "thermal_mode": "rc_staged"},
+}
 
-def run_policy_seeds(trace: Trace, cfg: dict, pol_spec: dict, seeds: list[int]) -> dict:
+WORLD_THERMAL = {
+    "tau_s": 240.0, "R_th": 0.30, "T_amb_C": 20.0, "T0_C": 38.0,
+    "T_throttle_C": 84.0, "T_release_C": 76.0, "f_throttle": 0.55,
+    "P_busy": 300.0, "busy_util_floor": 0.40, "batch_scale": 4.0,
+}
+
+
+def run_policy_seeds(trace: Trace, cfg: dict, pol_spec: dict, seeds: list[int]) -> tuple[dict, list[dict]]:
     rows = []
     for seed in seeds:
         env = simpy.Environment()
@@ -107,7 +123,7 @@ def run_policy_seeds(trace: Trace, cfg: dict, pol_spec: dict, seeds: list[int]) 
         elif isinstance(rows[0][k], (int, float)):
             vals = [r[k] for r in rows if r[k] is not None]
             mean_row[k] = st.fmean(vals) if vals else 0.0
-    return mean_row
+    return mean_row, rows
 
 
 def print_main_table(results: dict[str, dict]) -> None:
@@ -164,12 +180,18 @@ def main() -> None:
                     help="eclipse power cap (W); 300 keeps f_dark=1.0 for the no-derate counterfactual")
     ap.add_argument("--min-deadline-s", type=float, default=120.0)
     ap.add_argument("--policies", default="", help="comma-separated subset of POLICIES keys")
+    ap.add_argument("--world-thermal", default="off", choices=("off", "dynamic"),
+                    help="off: no thermal model (default); dynamic: inject the same first-order RC "
+                         "block as cosim_hotspot_stress_v1.yaml")
+    ap.add_argument("--kv-gib", type=float, default=None,
+                    help="override gpu.kv_gib (default keeps the script's 24 GiB)")
     args = ap.parse_args()
 
     seeds = [int(s) for s in args.seeds.split(",") if s.strip()]
     ltans = tuple(float(x) for x in args.ltans.split(",") if x.strip())
+    catalog = {**POLICIES, **EXTRA_POLICIES}
     policies = (
-        {k: POLICIES[k] for k in args.policies.split(",") if k.strip()} if args.policies else POLICIES
+        {k: catalog[k] for k in args.policies.split(",") if k.strip()} if args.policies else POLICIES
     )
     t0 = time.perf_counter()
     print(
@@ -205,12 +227,18 @@ def main() -> None:
     cfg["workload"]["rate_per_rs_per_min"] = args.rate
     cfg["power"]["P_dark"] = args.p_dark
     cfg["slo"]["min_deadline_s"] = args.min_deadline_s
+    if args.world_thermal == "dynamic":
+        cfg["thermal"] = dict(WORLD_THERMAL)
+    if args.kv_gib is not None:
+        cfg["gpu"]["kv_gib"] = args.kv_gib
     print(f"\n2. 运行主实验 (rate={args.rate}/min/RS, seeds={seeds}, P_dark={args.p_dark}, "
-          f"min_deadline_s={args.min_deadline_s})...", flush=True)
+          f"min_deadline_s={args.min_deadline_s}, world_thermal={args.world_thermal}, "
+          f"kv_gib={cfg['gpu']['kv_gib']})...", flush=True)
     main_results: dict[str, dict] = {}
+    per_seed: dict[str, list[dict]] = {}
     for name, spec in policies.items():
         ts = time.perf_counter()
-        main_results[name] = run_policy_seeds(trace, cfg, spec, seeds)
+        main_results[name], per_seed[name] = run_policy_seeds(trace, cfg, spec, seeds)
         r = main_results[name]
         print(
             f"   [{name:<13}] good_long={100*r['good_long_frac']:5.1f}%  "
@@ -236,7 +264,7 @@ def main() -> None:
             sweep_results[str(rate)] = {}
             cells = []
             for p_name, spec in policies.items():
-                res = run_policy_seeds(trace, scfg, spec, seeds[:2])
+                res, _ = run_policy_seeds(trace, scfg, spec, seeds[:2])
                 sweep_results[str(rate)][p_name] = res
                 cells.append(f"{100 * res['good_long_frac']:>12.1f}%")
             print(f"{rate:<14.1f} | " + " | ".join(cells), flush=True)
@@ -250,12 +278,15 @@ def main() -> None:
             "rate": args.rate,
             "p_dark": args.p_dark,
             "min_deadline_s": args.min_deadline_s,
+            "world_thermal": args.world_thermal,
+            "kv_gib": cfg["gpu"]["kv_gib"],
             "seeds": seeds,
             "horizon_s": 7200.0,
             "compute_dark_share": st_info["compute_dark_share"],
             "kinds": st_info["kinds"],
         },
         "main": main_results,
+        "per_seed": per_seed,
         "sweep": sweep_results,
     }
     out_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")

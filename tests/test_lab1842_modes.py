@@ -13,20 +13,32 @@ from satsim.cosim.synth import synth_multi_sso
 
 
 def test_orbit_load_mode_ids_and_rejects_unknown():
-    assert OrbitLoad().id == "orbit_thermal"
+    assert OrbitLoad().id == "orbit_thermal"                       # default -> dvfs, zero regression
+    assert OrbitLoad(thermal_mode="off").id == "orbit_load"
+    assert OrbitLoad(thermal_mode="hot_only").id == "orbit_hot_only"
+    assert OrbitLoad(thermal_mode="dvfs").id == "orbit_thermal"
+    assert OrbitLoad(thermal_mode="rc_const").id == "orbit_thermal_rc_const"
+    assert OrbitLoad(thermal_mode="rc_staged").id == "orbit_thermal_rc"
+    # legacy spellings keep working
     assert OrbitLoad(thermal_aware=True).id == "orbit_thermal"
     assert OrbitLoad(thermal_aware=False).id == "orbit_load"
     assert OrbitLoad(thermal_aware="hot_only").id == "orbit_hot_only"
     assert OrbitLoad(thermal_aware="rc").id == "orbit_thermal_rc"
+    assert OrbitLoad(thermal_mode="rc_staged", thermal_aware=False).id == "orbit_thermal_rc"
     with pytest.raises(ValueError):
-        OrbitLoad(thermal_aware="warmish")
+        OrbitLoad(thermal_mode="warmish")
 
 
 def test_orbit_load_modes_reach_policy_factory():
-    for thermal_aware, expected in ((False, "orbit_load"), ("hot_only", "orbit_hot_only"),
-                                    (True, "orbit_thermal"), ("rc", "orbit_thermal_rc")):
-        pol = make_policy({"policy": "orbit_load", "thermal_aware": thermal_aware})
-        assert pol.id == expected
+    for spec, expected in (({"thermal_mode": "off"}, "orbit_load"),
+                           ({"thermal_mode": "hot_only"}, "orbit_hot_only"),
+                           ({"thermal_aware": True}, "orbit_thermal"),
+                           ({"thermal_mode": "rc_const"}, "orbit_thermal_rc_const"),
+                           ({"thermal_mode": "rc_staged"}, "orbit_thermal_rc")):
+        assert make_policy({"policy": "orbit_load", **spec}).id == expected
+    composite = make_policy({"place": "orbit_load", "migrate": "none",
+                             "place_kwargs": {"thermal_mode": "off"}})
+    assert composite.placer.id == "orbit_load"
 
 
 def test_plane_idx_shares_survive_ltan_collapse():

@@ -268,6 +268,12 @@ class NearestUpload(Greedy):
         return best[0] if best else None
 
 
+def _prior_remaining_s(w, r) -> float:
+    """Prior on a resident's remaining output tokens (mean of the length band, net of progress)."""
+    lo, hi = w.cfg["workload"]["long_out" if r.long else "short_out"]
+    return max(1.0, (max(float(lo), r.gen) + float(hi)) / 2.0 - r.gen)
+
+
 def thermal_service_clock(w, j, batch, tokens, context):
     """Estimate the lit decode clock over a batch's service interval from its heat budget."""
     thermal = w.thermal
@@ -293,29 +299,47 @@ def thermal_service_clock(w, j, batch, tokens, context):
 class OrbitLoad(Greedy):
     """One-shot placement with upload, an output-length prior, and a load/heat forecast.
 
-    ``thermal_aware`` selects how much of the heat model is used. It only changes the
-    clock the *candidate* is priced at; the orbit/eclipse segments, upload ETA, prior
-    length and inbound ``reserved`` KV are identical in every mode, so the modes form a
-    single-variable ladder from "star-blind" to "same RC integration as the simulator":
+    ``thermal_mode`` selects how much of the heat model is used. It only changes the clock the
+    *candidate* is priced at; the orbit/eclipse segments, upload ETA, prior length and inbound
+    ``reserved`` KV are identical in every mode, so the modes form a single-variable ladder from
+    "star-blind" to "same RC integration as the simulator":
 
-    | mode        | id                 | sunlit clock                                   |
-    |-------------|--------------------|------------------------------------------------|
-    | ``False``   | ``orbit_load``     | ``1.0`` always (no heat at all)                |
-    | ``"hot_only"`` | ``orbit_hot_only`` | current ``thermal_f`` if already throttled, else ``1.0`` |
-    | ``True``    | ``orbit_thermal``  | ``thermal_service_clock`` (closed-form DVFS average) |
-    | ``"rc"``    | ``orbit_thermal_rc`` | ``ThermalForecast`` (stepwise RC, 84/76/0.55 hysteresis) |
+    | mode         | id                       | sunlit clock                                                  |
+    |--------------|--------------------------|---------------------------------------------------------------|
+    | ``"off"``    | ``orbit_load``           | ``1.0`` always                                                |
+    | ``"hot_only"`` | ``orbit_hot_only``     | current ``thermal_f`` if already throttled, else ``1.0``       |
+    | ``"dvfs"``   | ``orbit_thermal``        | ``thermal_service_clock`` (closed-form DVFS average, default)  |
+    | ``"rc_const"`` | ``orbit_thermal_rc_const`` | RC projection, arrival batch held constant for the whole request |
+    | ``"rc_staged"`` | ``orbit_thermal_rc``  | RC projection, residents drain in a staircase, batch shrinks   |
+
+    ``thermal_aware`` is kept for callers that still pass a bool (``True`` -> ``"dvfs"``,
+    ``False`` -> ``"off"``). ``thermal_mode`` wins when both are given, and unknown modes raise
+    instead of silently falling through to a default.
     """
 
     id = "orbit_load"
-    _IDS = {True: "orbit_thermal", False: "orbit_load", "hot_only": "orbit_hot_only",
-            "rc": "orbit_thermal_rc"}
+    _IDS = {
+        "off": "orbit_load",
+        "hot_only": "orbit_hot_only",
+        "dvfs": "orbit_thermal",
+        "rc_const": "orbit_thermal_rc_const",
+        "rc_staged": "orbit_thermal_rc",
+    }
+    _ALIASES = {"rc": "rc_staged", True: "dvfs", False: "off"}
 
-    def __init__(self, thermal_aware: bool | str = True):
-        if thermal_aware not in self._IDS:
-            raise ValueError(f"unknown thermal_aware {thermal_aware!r}; "
-                             f"one of {sorted(map(str, self._IDS))}")
-        self.thermal_aware = thermal_aware
-        self.id = self._IDS[thermal_aware]
+    def __init__(self, thermal_mode: str | None = None, thermal_aware: bool | str = True):
+        if thermal_mode is None:
+            thermal_mode = thermal_aware
+        mode = self._ALIASES.get(thermal_mode, thermal_mode)
+        if mode not in self._IDS:
+            raise ValueError(f"unknown thermal mode {thermal_mode!r}; one of {sorted(self._IDS)}")
+        self.thermal_mode = mode
+        self.id = self._IDS[mode]
+
+    @property
+    def thermal_aware(self):
+        """Back-compat view of ``thermal_mode``: True for dvfs, False for off, else the mode name."""
+        return {"dvfs": True, "off": False}.get(self.thermal_mode, self.thermal_mode)
 
     def place(self, w, r):
         bounds = w.cfg["workload"]["long_out" if r.long else "short_out"]
@@ -328,14 +352,11 @@ class OrbitLoad(Greedy):
         batch = len(w.nodes[j]) + 1 + int(w.reserved[j] > 0)
         context = sum(x.kv for x in w.nodes[j]) + r.pin + tokens / 2 + w.reserved[j] / w.bpt / 2
         start = w.env.now + upload_s
-        if self.thermal_aware == "rc" and w.thermal is not None:
-            from satsim.cosim.thermal_rebalance import ThermalForecast
-
-            end = ThermalForecast(w, j).finish(start, batch, context, tokens)
-            return INF if end == math.inf else w.tr.next_conn(r.origin, j, end)
-        if self.thermal_aware is False:
+        if self.thermal_mode in ("rc_const", "rc_staged") and w.thermal is not None:
+            return self._delivery_rc(w, r, tokens, j, upload_s, batch, context, start)
+        if self.thermal_mode == "off":
             clock = 1.0
-        elif self.thermal_aware == "hot_only":
+        elif self.thermal_mode == "hot_only":
             clock = w.thermal_f[j] if w.thermal is not None else 1.0
         else:
             clock = thermal_service_clock(w, j, batch, tokens, context)
@@ -346,6 +367,37 @@ class OrbitLoad(Greedy):
                 return w.tr.next_conn(r.origin, j, a + tokens * step)
             tokens -= (b - a) / step
         return INF
+
+    def _delivery_rc(self, w, r, tokens, j, upload_s, batch, context, start):
+        """RC projection shared by ``rc_const`` and ``rc_staged``.
+
+        Both advance the forecast across the upload window (the request is not decoding yet, but
+        the node keeps heating from its residents). They differ in what happens next: ``rc_const``
+        holds the arrival batch for the whole request, ``rc_staged`` drains residents.
+        """
+        from satsim.cosim.thermal_rebalance import ThermalForecast
+
+        now = w.env.now
+        forecast = ThermalForecast(w, j)
+        forecast.advance(now, upload_s, max(len(w.nodes[j]), 1))
+        if self.thermal_mode == "rc_const":
+            end = forecast.finish(start, batch, context, tokens)
+            return INF if end == math.inf else w.tr.next_conn(r.origin, j, end)
+
+        kv_left = sorted(((_prior_remaining_s(w, x), x.kv) for x in w.nodes[j]))
+        t = start
+        left = tokens
+        while left > 0:
+            batch = 1 + len(kv_left)
+            ctx = sum(kv for _, kv in kv_left) + r.pin + left / 2 + w.reserved[j] / w.bpt / 2
+            step_tok = min(left, kv_left[0][0]) if kv_left else left
+            end = forecast.finish(t, batch, ctx, step_tok)
+            if end == math.inf:
+                return INF
+            left -= step_tok
+            kv_left = [(rt - step_tok, kv) for rt, kv in kv_left if rt - step_tok > 1e-9]
+            t = end
+        return w.tr.next_conn(r.origin, j, t)
 
 
 class Reactive(Greedy):

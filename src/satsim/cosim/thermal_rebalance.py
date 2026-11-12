@@ -129,6 +129,40 @@ class ThermalForecast:
         self.temp = self.model.temperature(node)
         self.throttled = world.thermal_f[node] < 1
 
+    def advance(self, start, dt, batch):
+        """Integrate the node's temperature for ``dt`` seconds with ``batch`` residents decoding.
+
+        Token accounting is skipped on purpose: this is the "what happens while the request is
+        still uploading / queued" half of a projection, where the caller only needs the temperature
+        at the far end of the interval and whether the throttle state flipped.
+        """
+        w, model = self.w, self.model
+        if dt <= 0:
+            return start
+        target = start + dt
+        for now, end, dark in w.tr.power_segments(self.node, start):
+            orbit_clock = w.f_dark if dark else 1.0
+            while now < min(end, target):
+                clock = min(orbit_clock, max(model.f_min, model.f_throttle)) if self.throttled else orbit_clock
+                power = w.device_power(batch, clock)
+                equilibrium = model.T_amb_C + model.R_th * power
+                boundary = model.T_release_C if self.throttled else model.T_throttle_C
+                can_cross = equilibrium < boundary if self.throttled else equilibrium > boundary
+                until_cross = math.inf
+                if can_cross:
+                    ratio = (self.temp - equilibrium) / (boundary - equilibrium)
+                    until_cross = model.tau_s * math.log(max(1.0, ratio))
+                step = min(min(end, target) - now, until_cross)
+                if step == until_cross:
+                    self.temp = boundary
+                    self.throttled = not self.throttled
+                else:
+                    self.temp = equilibrium + (self.temp - equilibrium) * math.exp(-step / model.tau_s)
+                now += step
+            if now >= target:
+                break
+        return target
+
     def finish(self, start, batch, context, tokens):
         w, model = self.w, self.model
         for now, end, dark in w.tr.power_segments(self.node, start):

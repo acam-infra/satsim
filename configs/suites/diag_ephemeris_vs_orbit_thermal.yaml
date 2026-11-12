@@ -2,6 +2,13 @@
 # integration, on the E2 hotspot scenario. Every rung keeps upload ETA, the output-length
 # prior, the inbound `reserved` KV and the eclipse segments identical; only the sunlit clock
 # differs. Paired over 5 seeds and three long-request SLO factors.
+#
+# thermal_mode ladder (see OrbitLoad docstring):
+#   off       -> 1.0 always            (pure ephemeris + queue baseline)
+#   hot_only  -> current thermal_f     (only avoids nodes already at the 84 C wall)
+#   dvfs      -> thermal_service_clock (closed-form heat budget, default / zero regression)
+#   rc_const  -> ThermalForecast, arrival batch frozen for the whole request
+#   rc_staged -> ThermalForecast, residents drain, batch shrinks (same RC as the simulator)
 name: diag_ephemeris_vs_orbit_thermal
 base: ../cosim_hotspot_stress_v1.yaml
 seeds: [11, 12, 13, 14, 15]
@@ -12,12 +19,13 @@ axes:
 policies:
   nearest: {policy: nearest}
   ephemeris: {policy: ephemeris}
-  orbit_load_nothermal: {policy: orbit_load, thermal_aware: false}
-  orbit_hot_only: {policy: orbit_load, thermal_aware: hot_only}
+  orbit_load: {policy: orbit_load, thermal_mode: off}
+  orbit_hot_only: {policy: orbit_load, thermal_mode: hot_only}
   orbit_thermal: {policy: orbit_thermal}
-  orbit_thermal_rc: {policy: orbit_load, thermal_aware: rc}
+  orbit_thermal_rc_const: {policy: orbit_load, thermal_mode: rc_const}
+  orbit_thermal_rc: {policy: orbit_load, thermal_mode: rc_staged}
 report:
-  baseline: orbit_load_nothermal
+  baseline: orbit_load
   metrics:
     - good_long_frac
     - goodput_tok_s
