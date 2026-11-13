@@ -243,6 +243,16 @@ class DiscreteThermalMigrator(TorchRebalance):
         return parse_discrete_power_spec(getattr(w, "cfg", {}))
 
     @classmethod
+    def _node_temp_c(cls, w, node: int) -> float:
+        if hasattr(w, "temperature"):
+            return float(w.temperature(node))
+        pm = getattr(w, "power_model", None)
+        if pm is not None:
+            return float(pm.temperature(node))
+        thermal = getattr(w, "thermal", None)
+        return float(thermal.temperature(node)) if thermal is not None else 0.0
+
+    @classmethod
     def _node_power_w(cls, w, node: int, batch: int, t: float) -> float:
         pm = getattr(w, "power_model", None)
         is_dark = w.tr.is_dark(node, t)
@@ -250,7 +260,7 @@ class DiscreteThermalMigrator(TorchRebalance):
             return float(pm.operating_point(node, batch, is_dark=is_dark, t=t).power_w)
         spec = cls._spec(w)
         if spec is not None:
-            cur_t = w.thermal.temperature(node) if getattr(w, "thermal", None) is not None else None
+            cur_t = cls._node_temp_c(w, node)
             return float(select_tier_for_batch(spec, batch, is_eclipse=is_dark, current_temp_c=cur_t).power_w)
         return float(w.device_power(batch, w.f_of(node, t)))
 
@@ -270,9 +280,23 @@ class DiscreteThermalMigrator(TorchRebalance):
         if t_max is None or not jobs:
             return True
 
+        spec = cls._spec(w)
+        horizon_s = spec.thermal_horizon_s if spec is not None else 30.0
+        cur_temp = cls._node_temp_c(w, dst)
+        if cur_temp >= t_max - 1e-6:
+            return False
+
         pm = getattr(w, "power_model", None)
         if pm is not None:
-            # Project worst-case step horizon via unified PowerThermalModel seam
+            now = float(getattr(getattr(w, "env", None), "now", start_t))
+            if hasattr(pm, "advance_temp"):
+                t_arr = pm.advance_temp(dst, now, max(0.0, start_t - now), len(w.nodes[dst]), trace=w.tr)
+                if t_arr >= t_max - 1e-6:
+                    return False
+                end_temp = pm.advance_temp(
+                    dst, start_t, horizon_s, len(jobs), trace=w.tr, initial_temp_c=t_arr
+                )
+                return end_temp <= t_max + 1e-6
             ctx = sum(x.kv for x in jobs)
             _, end_temp = pm.project_finish(dst, start_t, len(jobs), ctx, 200.0, trace=w.tr, gpu=w.gpu)
             return end_temp <= t_max + 1e-6
@@ -280,21 +304,20 @@ class DiscreteThermalMigrator(TorchRebalance):
         thermal = getattr(w, "thermal", None)
         if thermal is None:
             return True
-        spec = cls._spec(w)
         if spec is not None:
             p_w = cls._node_power_w(w, dst, len(jobs), start_t)
             traj = rollout_rc_temperatures(
-                thermal.temperature(dst),
+                cur_temp,
                 [p_w, p_w],
                 tau_s=thermal.tau_s,
                 r_th=thermal.R_th,
                 t_amb_c=thermal.T_amb_C,
-                dt_s=max(1.0, spec.thermal_horizon_s / 2.0),
+                dt_s=max(1.0, horizon_s / 2.0),
             )
             return max(traj) <= t_max + 1e-6
 
         fc = ThermalForecast(w, dst)
-        fc.advance(start_t, 30.0, len(jobs))
+        fc.advance(start_t, horizon_s, len(jobs))
         return fc.temp <= t_max + 1e-6
 
     def _collect_candidates(self, w, urgent_relay: bool = False) -> list[CandidateMove]:
@@ -322,7 +345,7 @@ class DiscreteThermalMigrator(TorchRebalance):
                 w.thermal_f[j] < 1.0,
                 len(w.nodes[j]) == 0,  # Prefer already-active cool nodes over waking 0W idle nodes
                 len(w.nodes[j]) + round(w.reserved[j] / long_need),
-                w.thermal.temperature(j) if w.thermal else 0.0,
+                self._node_temp_c(w, j),
                 j,
             )
         )
@@ -370,8 +393,6 @@ class DiscreteThermalMigrator(TorchRebalance):
                     continue
 
                 nbytes = r.kv * w.bpt
-                # Check if any 1-hop path to a feasible sunlit/cool destination exists for this request
-                has_feasible_1hop = False
                 dst_paths: list[tuple[int, tuple[list[int], list[int]], float]] = []
                 for dst in dst_candidates:
                     if dst == src or not w.fits(dst, r):
@@ -383,17 +404,22 @@ class DiscreteThermalMigrator(TorchRebalance):
                         bw = min(w.net.cap[e] / (edge_users.get(e, 0) + 1) for e in p[1])
                         d_p = nbytes / bw + w.hop_lat * len(p[1]) + w.switch_s
                         if path_lifetime(w, p) >= now + 1.25 * d_p and d_p < w.mig_timeout:
-                            if len(p[1]) == 1:
-                                has_feasible_1hop = True
                             dst_paths.append((dst, p, d_p))
                             break
+                    if len(dst_paths) >= 14:
+                        break
 
+                # Evaluate 1-hop candidates before >=2-hop relays so only genuinely thermally-safe
+                # positive-gain 1-hop options suppress multi-hop escape out of a regional hotspot.
+                dst_paths.sort(key=lambda item: len(item[1][1]) > 1)
+                has_good_1hop = False
                 feasible = 0
                 for dst, p, delay in dst_paths:
                     hops = len(p[1])
-                    # 2~3 hop congestion gate: only use multi-hop when 1-hop is blocked AND relay edges are uncongested
+                    # 2~3 hop congestion gate: only use multi-hop when 1-hop has no good cool option
+                    # AND relay edges have enough uncongested headroom.
                     if hops >= 2:
-                        if has_feasible_1hop:
+                        if has_good_1hop:
                             continue
                         if any(1.0 / (edge_users.get(e, 0) + 1) < self.relay_min_free_ratio for e in p[1]):
                             continue
@@ -433,6 +459,8 @@ class DiscreteThermalMigrator(TorchRebalance):
                     gain = net_slo_gain - link_prob_cost + (net_time_saved / max(1.0, r.deadline - r.t)) * 0.15 + power_bonus
 
                     if gain > min_gain and (net_time_saved > 0.0 or (empties_src_to_0w and delta_power_w < 0.0)):
+                        if hops == 1:
+                            has_good_1hop = True
                         def _make_marginal(
                             _dst=dst, _r=r, _delay=delay, _stay_s=stay_s, _stay_f=stay_f,
                             _relief_s=relief_s, _relief_t=relief_t, _link_s=kv_link_s + delta_tether_link_s,
@@ -540,6 +568,7 @@ class SnapshotResult:
 def _evaluate_node_slots(
     prob: SnapshotProblem,
     assign: list[list[int]],  # assign[r][t] -> node
+    tier_assign: list[list[int]] | None = None,
 ) -> tuple[float, int, float, float]:
     """Compute (objective, thermal_violations, energy_kj, zero_w_frac) for a node assignment."""
     n_req = len(prob.req_init_node)
@@ -559,16 +588,27 @@ def _evaluate_node_slots(
                 zero_slots += 1
             else:
                 dark = prob.is_dark[j][t]
-                feasible = [
-                    (pw, mb, cf)
-                    for pw, mb, cf in prob.tiers[1:]
-                    if (not dark or pw <= prob.p_dark_w + 1e-9)
-                    and alpha * cur_t + offset + gain * pw <= prob.t_max_c + 1e-9
-                ]
-                if not feasible:
-                    feasible = [min(prob.tiers[1:], key=lambda x: x[0])]
-                fitting = [x for x in feasible if x[1] >= batch]
-                chosen = max(fitting, key=lambda x: (x[2], -x[0])) if fitting else max(feasible, key=lambda x: x[1])
+                if tier_assign is not None and 1 <= tier_assign[j][t] < len(prob.tiers):
+                    tk = prob.tiers[tier_assign[j][t]]
+                    if tk[1] >= batch and (not dark or tk[0] <= prob.p_dark_w + 1e-9) and (
+                        alpha * cur_t + offset + gain * tk[0] <= prob.t_max_c + 1e-6
+                    ):
+                        chosen = tk
+                    else:
+                        chosen = None
+                else:
+                    chosen = None
+                if chosen is None:
+                    feasible = [
+                        (pw, mb, cf)
+                        for pw, mb, cf in prob.tiers[1:]
+                        if (not dark or pw <= prob.p_dark_w + 1e-9)
+                        and alpha * cur_t + offset + gain * pw <= prob.t_max_c + 1e-9
+                    ]
+                    if not feasible:
+                        feasible = [min(prob.tiers[1:], key=lambda x: x[0])]
+                    fitting = [x for x in feasible if x[1] >= batch]
+                    chosen = max(fitting, key=lambda x: (x[2], -x[0])) if fitting else max(feasible, key=lambda x: x[1])
                 p_w = chosen[0]
                 cf = chosen[2]
                 # Reward requests served at node j in slot t scaled by clock_f and slot weight
@@ -756,26 +796,35 @@ class SnapshotTimeIlpSolver:
         # y[r, j, t] in {0, 1}: request r at node j in slot t
         # z[j, t, k] in {0, 1}: node j in slot t uses tier k (k=0 is 0W idle)
         # T[j, t] continuous: temperature at end of slot t
-        # u[j, t] continuous: tier-clock-weighted service value at node j in slot t
+        # w[r, j, t] continuous: exact McCormick envelope of y[r,j,t] * sum_k cf_k * z[j,t,k] * (val_r/T)
         # m[r, u, v, t] in {0, 1}: migration of request r from u to v at start of slot t
         n_y = n_req * n_nodes * n_slots
         n_z = n_nodes * n_slots * n_tiers
         n_T = n_nodes * n_slots
-        n_u = n_nodes * n_slots
+        n_w = n_req * n_nodes * n_slots
 
-        # Precompute feasible migrations (r, u, v, t, edges)
+        # Precompute pairwise shortest-path edges once per (u, v) instead of per (t, r, u, v)
+        pair_edges: dict[tuple[int, int], list[int]] = {}
+        for u in range(n_nodes):
+            for v in range(n_nodes):
+                if u == v:
+                    continue
+                edges = _shortest_path_edges(prob, u, v, self.max_hops)
+                if edges is not None:
+                    pair_edges[(u, v)] = edges
+
+        # Precompute feasible migrations (r, u, v, t, edges); at t=0 only u == req_init_node[r] is valid
         mig_tuples: list[tuple[int, int, int, int, list[int]]] = []
         for t in range(n_slots):
             for r in range(n_req):
-                for u in range(n_nodes):
+                u_candidates = (prob.req_init_node[r],) if t == 0 else range(n_nodes)
+                for u in u_candidates:
                     for v in range(n_nodes):
-                        if u == v:
-                            continue
-                        edges = _shortest_path_edges(prob, u, v, self.max_hops)
+                        edges = pair_edges.get((u, v))
                         if edges is not None:
                             mig_tuples.append((r, u, v, t, edges))
         n_m = len(mig_tuples)
-        total_vars = n_y + n_z + n_T + n_u + n_m
+        total_vars = n_y + n_z + n_T + n_w + n_m
 
         def y_idx(r: int, j: int, t: int) -> int:
             return (r * n_nodes + j) * n_slots + t
@@ -786,22 +835,24 @@ class SnapshotTimeIlpSolver:
         def t_idx(j: int, t: int) -> int:
             return n_y + n_z + j * n_slots + t
 
-        def u_idx(j: int, t: int) -> int:
-            return n_y + n_z + n_T + j * n_slots + t
+        def w_idx(r: int, j: int, t: int) -> int:
+            return n_y + n_z + n_T + (r * n_nodes + j) * n_slots + t
 
         def m_idx(idx: int) -> int:
-            return n_y + n_z + n_T + n_u + idx
+            return n_y + n_z + n_T + n_w + idx
 
-        max_slot_val = sum(prob.req_value) / max(1, n_slots)
         integrality = np.ones(total_vars, dtype=int)
-        integrality[n_y + n_z : n_y + n_z + n_T + n_u] = 0  # T and u are continuous
+        integrality[n_y + n_z : n_y + n_z + n_T + n_w] = 0  # T and w are continuous
 
         lb = np.zeros(total_vars, dtype=float)
         ub = np.ones(total_vars, dtype=float)
         lb[n_y + n_z : n_y + n_z + n_T] = -50.0
         ub[n_y + n_z : n_y + n_z + n_T] = prob.t_max_c
-        lb[n_y + n_z + n_T : n_y + n_z + n_T + n_u] = 0.0
-        ub[n_y + n_z + n_T : n_y + n_z + n_T + n_u] = max_slot_val
+        for r in range(n_req):
+            rv = prob.req_value[r] / max(1, n_slots)
+            for j in range(n_nodes):
+                for t in range(n_slots):
+                    ub[w_idx(r, j, t)] = rv
 
         # Eclipse tier forbiddance
         for j in range(n_nodes):
@@ -812,12 +863,17 @@ class SnapshotTimeIlpSolver:
                             ub[z_idx(j, t, k)] = 0.0
 
         obj = np.zeros(total_vars, dtype=float)
+        for r in range(n_req):
+            for j in range(n_nodes):
+                for t in range(n_slots):
+                    obj[w_idx(r, j, t)] = -1.0
         for j in range(n_nodes):
             for t in range(n_slots):
-                obj[u_idx(j, t)] = -1.0
                 for k in range(n_tiers):
                     pw = prob.tiers[k][0]
                     obj[z_idx(j, t, k)] = prob.energy_lambda * (pw * prob.dt_s / 1000.0)
+        for idx in range(n_m):
+            obj[m_idx(idx)] = 1e-6  # Tiny symmetry-breaking tie-breaker against zero-sum cycles
 
         rows: list[int] = []
         cols: list[int] = []
@@ -855,19 +911,17 @@ class SnapshotTimeIlpSolver:
                 items.extend((z_idx(j, t, k), -float(prob.tiers[k][1])) for k in range(n_tiers))
                 add_le(items, 0.0)
 
-        # 3b. Tier-clock-weighted service: u[j,t] - cf_k * sum_r (val_r/T)*y[r,j,t] - M*(1 - z[j,t,k]) <= 0
-        #     => u[j,t] - cf_k * sum_r (val_r/T)*y[r,j,t] + M*z[j,t,k] <= M
-        for j in range(n_nodes):
-            for t in range(n_slots):
-                for k in range(n_tiers):
-                    cf = prob.tiers[k][2]
-                    items = [(u_idx(j, t), 1.0), (z_idx(j, t, k), max_slot_val)]
-                    if cf > 0.0:
-                        items.extend(
-                            (y_idx(r, j, t), -cf * (prob.req_value[r] / n_slots))
-                            for r in range(n_req)
-                        )
-                    add_le(items, max_slot_val)
+        # 3b. Big-M-free McCormick envelope for w[r,j,t] = (val_r/T) * y[r,j,t] * (sum_k cf_k * z[j,t,k])
+        for r in range(n_req):
+            rv = prob.req_value[r] / max(1, n_slots)
+            for j in range(n_nodes):
+                for t in range(n_slots):
+                    add_le([(w_idx(r, j, t), 1.0), (y_idx(r, j, t), -rv)], 0.0)
+                    tier_items = [(w_idx(r, j, t), 1.0)]
+                    tier_items.extend(
+                        (z_idx(j, t, k), -rv * prob.tiers[k][2]) for k in range(n_tiers) if prob.tiers[k][2] > 0.0
+                    )
+                    add_le(tier_items, 0.0)
 
         # 4. 1st-order RC temperature dynamics: T[j,t] - alpha*T[j,t-1] - gain*sum_k P_k*z[j,t,k] == offset
         for j in range(n_nodes):
@@ -880,7 +934,7 @@ class SnapshotTimeIlpSolver:
                     items.append((t_idx(j, t - 1), -alpha))
                     add_eq(items, offset)
 
-        # 5. Flow conservation for migrations: y[r,j,t] == prev_y + in_m - out_m
+        # 5. Flow conservation + departure/arrival tightening (eliminates phantom LP circulations)
         in_by_rjt: dict[tuple[int, int, int], list[int]] = {}
         out_by_rjt: dict[tuple[int, int, int], list[int]] = {}
         edge_items: dict[tuple[int, int], list[tuple[int, float]]] = {}
@@ -893,17 +947,29 @@ class SnapshotTimeIlpSolver:
         for r in range(n_req):
             for j in range(n_nodes):
                 for t in range(n_slots):
+                    in_list = in_by_rjt.get((r, j, t), ())
+                    out_list = out_by_rjt.get((r, j, t), ())
                     items = [(y_idx(r, j, t), 1.0)]
-                    for idx in in_by_rjt.get((r, j, t), ()):
+                    for idx in in_list:
                         items.append((m_idx(idx), -1.0))
-                    for idx in out_by_rjt.get((r, j, t), ()):
+                    for idx in out_list:
                         items.append((m_idx(idx), 1.0))
                     if t == 0:
                         rhs = 1.0 if prob.req_init_node[r] == j else 0.0
                         add_eq(items, rhs)
+                        if out_list:
+                            add_le([(m_idx(idx), 1.0) for idx in out_list], rhs)
                     else:
                         items.append((y_idx(r, j, t - 1), -1.0))
                         add_eq(items, 0.0)
+                        if out_list:
+                            out_le = [(m_idx(idx), 1.0) for idx in out_list]
+                            out_le.append((y_idx(r, j, t - 1), -1.0))
+                            add_le(out_le, 0.0)
+                    if in_list:
+                        in_le = [(m_idx(idx), 1.0) for idx in in_list]
+                        in_le.append((y_idx(r, j, t), -1.0))
+                        add_le(in_le, 0.0)
 
         # 6. Multi-hop edge bandwidth capacity per slot
         for (e, _t), items in edge_items.items():
@@ -929,6 +995,11 @@ class SnapshotTimeIlpSolver:
                 best_j = max(range(n_nodes), key=lambda j: res.x[y_idx(r, j, t)])
                 assign[r][t] = best_j
 
-        eval_obj, viol, ekj, zw = _evaluate_node_slots(prob, assign)
+        tier_assign = [
+            [max(range(n_tiers), key=lambda k: res.x[z_idx(j, t, k)]) for t in range(n_slots)]
+            for j in range(n_nodes)
+        ]
+
+        eval_obj, viol, ekj, zw = _evaluate_node_slots(prob, assign, tier_assign=tier_assign)
         return SnapshotResult("120s Time-ILP", eval_obj, solve_ms, viol, ekj, zw, timed_out=timed_out)
 

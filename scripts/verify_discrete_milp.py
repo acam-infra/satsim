@@ -69,15 +69,16 @@ def run_benchmark(label: str, prob: SnapshotProblem, ilp_time_limit_s: float) ->
     time_ilp = SnapshotTimeIlpSolver(time_limit_s=ilp_time_limit_s, max_hops=3).solve(prob)
     results = [no_plan, one_hop, rh_greedy, time_ilp]
 
-    ilp_obj = time_ilp.objective if time_ilp.objective > 0 else 1.0
+    ilp_valid = time_ilp.objective > -1e9 and time_ilp.objective > 0
     print(f"\n=== {label} (N={prob.n_nodes}, T={prob.n_slots}, R={len(prob.req_init_node)}) ===")
     print(f"{'Method':20s} | {'Obj':>8s} | {'%ILP':>7s} | {'Time(ms)':>10s} | {'ThermViol':>9s} | {'Energy(kJ)':>10s} | {'0W%':>7s}")
     print("-" * 86)
     for r in results:
-        pct = (r.objective / ilp_obj * 100.0) if ilp_obj > 0 and r.objective > -1e9 else 0.0
+        pct_str = f"{(r.objective / time_ilp.objective * 100.0):6.1f}%" if (ilp_valid and r.objective > -1e9) else "   N/A "
+        obj_str = f"{r.objective:8.3f}" if r.objective > -1e9 else "    -inf"
         to_tag = "*" if r.timed_out else " "
         print(
-            f"{r.name:20s} | {r.objective:8.3f} | {pct:6.1f}% | {r.solve_ms:9.2f}{to_tag} | "
+            f"{r.name:20s} | {obj_str} | {pct_str} | {r.solve_ms:9.2f}{to_tag} | "
             f"{r.thermal_violations:9d} | {r.energy_kj:10.2f} | {r.zero_w_frac*100:6.1f}%"
         )
     return results

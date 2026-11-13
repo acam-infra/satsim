@@ -24,7 +24,7 @@ class ThermalRebalance:
         self.max_mig_per_req = 1 if max_mig_per_req is None else int(max_mig_per_req)
 
     def place(self, w, r):
-        return self.placement.place(w, r) if self.placement is not None else None if self.placement is not None else None
+        return self.placement.place(w, r) if self.placement is not None else None
 
     @staticmethod
     def _remaining(w, r):
@@ -142,8 +142,14 @@ class ThermalForecast:
         at the far end of the interval and whether the throttle state flipped.
         """
         w, model = self.w, self.model
-        if dt <= 0 or model is None:
-            return start + max(0.0, dt) if model is None else start
+        if dt <= 0:
+            return start
+        if model is None:
+            if self.power_model is not None and hasattr(self.power_model, "advance_temp"):
+                self.temp = self.power_model.advance_temp(
+                    self.node, start, dt, batch, trace=w.tr, initial_temp_c=self.temp
+                )
+            return start + dt
         target = start + dt
         for now, end, dark in w.tr.power_segments(self.node, start):
             orbit_clock = w.f_dark if dark else 1.0
@@ -169,15 +175,17 @@ class ThermalForecast:
         return target
 
     def finish(self, start, batch, context, tokens):
-        if self.power_model is not None:
+        if self.model is None and self.power_model is not None:
+            kw = {"trace": self.w.tr, "gpu": self.w.gpu}
+            if hasattr(self.power_model, "advance_temp"):
+                kw["initial_temp_c"] = self.temp
             finish_t, end_temp = self.power_model.project_finish(
                 self.node,
                 start,
                 batch,
                 context,
                 tokens,
-                trace=self.w.tr,
-                gpu=self.w.gpu,
+                **kw,
             )
             self.temp = end_temp
             return finish_t
@@ -226,15 +234,29 @@ def _interp_linear(x: float, xs: list[float], ys: list[float]) -> float:
     return ys[k] + (x - xs[k]) / dx * (ys[k + 1] - ys[k])
 
 
+_KSP_CACHE: dict[tuple[int, int, int, int, int, int], list[tuple[list[int], list[int]]]] = {}
+
+
 def k_shortest_paths(
     trace, s: int, d: int, t: float, k: int = 3, max_hops: int = 6
 ) -> list[tuple[list[int], list[int]]]:
-    """Up to k simple paths at time t avoiding intermediate RS nodes."""
+    """Up to k simple paths at time t avoiding intermediate RS nodes (cached per trace epoch)."""
+    ep = trace.epoch_index(t) if hasattr(trace, "epoch_index") else None
+    cache_key = (id(trace), ep, s, d, k, max_hops) if ep is not None else None
+    if cache_key is not None:
+        cached = _KSP_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
     p0 = trace.path(s, d, t)
     if p0 is None or not p0[1]:
-        return [] if p0 is None else [p0]
+        out = [] if p0 is None else [p0]
+        if cache_key is not None:
+            _KSP_CACHE[cache_key] = out
+        return out
     paths = [p0]
     if k <= 1:
+        if cache_key is not None:
+            _KSP_CACHE[cache_key] = paths
         return paths
     adj = trace.adjacency(t)
     for ban_e in p0[1]:
@@ -264,6 +286,10 @@ def k_shortest_paths(
             cand = (nodes[::-1], eids[::-1])
             if len(cand[1]) <= max_hops and cand not in paths:
                 paths.append(cand)
+    if cache_key is not None:
+        if len(_KSP_CACHE) > 65536:
+            _KSP_CACHE.clear()
+        _KSP_CACHE[cache_key] = paths
     return paths
 
 
@@ -513,7 +539,7 @@ class TorchRebalance:
             key=lambda j: (
                 w.thermal_f[j] < 1.0,
                 len(w.nodes[j]) + round(w.reserved[j] / long_need),
-                w.thermal.temperature(j) if w.thermal else 0.0,
+                w.temperature(j) if hasattr(w, "temperature") else (w.thermal.temperature(j) if w.thermal else 0.0),
                 j,
             )
         )

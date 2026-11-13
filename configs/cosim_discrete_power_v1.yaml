@@ -67,4 +67,11 @@ policies:
   place_once: {place: orbit_thermal, migrate: none}
   least_loaded: {policy: least_loaded}
   cool_aware: {place: orbit_thermal, migrate: cool_aware}
+  deadline_rc:
+    policy: thermal_rebalance
+    placement: {policy: orbit_load}
+    thermal_aware: rc
+  discrete_rh_greedy:
+    policy: discrete_rh_greedy
+    placement: {policy: orbit_load}
 seeds: [11, 12, 13]

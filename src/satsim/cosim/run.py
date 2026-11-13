@@ -137,8 +137,21 @@ def run(cfg: dict, viz_dir: Path | None = None, quiet: bool = False) -> dict:
     table = {}
     for name in cfg["policies"]:
         rs = [r for r in rows if r["policy"] == name]
-        table[name] = {k: st.fmean([r[k] for r in rs if r[k] is not None]) if any(r[k] is not None for r in rs) else None
-                       for k in rs[0] if k not in ("policy", "seed")}
+        mean_row = {}
+        for k in rs[0]:
+            if k in ("policy", "seed"):
+                continue
+            vals = [r[k] for r in rs if r[k] is not None]
+            if not vals:
+                mean_row[k] = None
+            elif isinstance(vals[0], dict):
+                mean_row[k] = {
+                    subk: st.fmean(v[subk] for v in vals if v.get(subk) is not None)
+                    for subk in vals[0]
+                }
+            else:
+                mean_row[k] = st.fmean(vals)
+        table[name] = mean_row
     payload = {"name": cfg["name"], "trace": trace.name, "delivery": cfg["delivery"], "rows": rows, "mean": table}
     if viz_dir is not None:
         write_playback(cfg, trace, playback_runs, table, viz_dir)

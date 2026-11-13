@@ -320,14 +320,99 @@ def test_discrete_migrator_hard_rejects_over_tmax_and_registers_step_milp() -> N
     }
     env = simpy.Environment()
     w = CoWorld(env, tr, cfg, pol_standalone, seed=1)
-    # Set dst node 2 right at T_max_C=84.0 so any active tier heating pushes it over 84.0 C
-    w.thermal._T[2] = 84.5
+    # Set dst node 2 right above T_max_C=84.0 via PowerThermalModel seam so it is hard-rejected
+    w.power_model.set_temperature(2, 84.5)
     r1 = CRequest(i=1, origin=0, t=0.0, pin=4000, pout=20000, long=True, deadline=900.0, upload_bytes=1e6)
     r1.state = "run"
     r1.node = 1
     w.nodes[1].append(r1)
     cands = pol_standalone._collect_candidates(w, urgent_relay=False)
     assert all(c.dst != 2 for c in cands)
+
+
+def test_overheated_1hop_does_not_block_uncongested_2hop_escape_and_run_aggregates_dicts() -> None:
+    from satsim.cosim.run import run as cosim_run
+    from satsim.cosim.trace import Trace
+    from satsim.cosim.world import CRequest, CoWorld
+    from pathlib import Path
+    import json
+    import simpy
+    import tempfile
+
+    # Chain 1 - 2 - 3: node 1 dark, 1-hop node 2 sunlit but overheated (84.5C > T_max=84C),
+    # 2-hop node 3 sunlit and cool (38C). Overheated 1-hop must NOT block 2-hop escape to node 3.
+    tr_dict = {
+        "schema": "orbitsim.contact_trace/v1",
+        "name": "escape-2hop",
+        "horizon_s": 1500.0,
+        "nodes": [
+            {"id": 0, "role": "rs"},
+            {"id": 1, "role": "compute"},
+            {"id": 2, "role": "compute"},
+            {"id": 3, "role": "compute"},
+        ],
+        "edges": [
+            {"u": 0, "v": 1, "kind": "rs", "up": [[0, 1500]]},
+            {"u": 0, "v": 3, "kind": "rs", "up": [[0, 1500]]},
+            {"u": 1, "v": 2, "kind": "intra", "up": [[0, 1500]]},
+            {"u": 2, "v": 3, "kind": "intra", "up": [[0, 1500]]},
+        ],
+        "dark": [[], [[0, 1500]], [], []],
+    }
+    tr = Trace(tr_dict)
+    cfg = {
+        "name": "mini_discrete_run",
+        "model": {"layers": 32, "kv_heads": 8, "head_dim": 128, "bytes_per_elem": 2},
+        "gpu": {"kv_gib": 24.0, "t_fixed_s": 0.003, "t_weights_s": 0.01, "t_kv_tok_s": 1e-7,
+                "t_seq_s": 5e-5, "mem_freq_exp": 0.6},
+        "power": {
+            "mode": "discrete_tiers",
+            "P_dark": 150,
+            "tiers": [
+                {"name": "idle_0w", "power_w": 0.0, "max_batch": 0, "clock_f": 0.0},
+                {"name": "low", "power_w": 150.0, "max_batch": 4, "clock_f": 0.65},
+                {"name": "high", "power_w": 300.0, "max_batch": 12, "clock_f": 1.0},
+            ],
+        },
+        "thermal": {
+            "tau_s": 240.0, "R_th": 0.30, "T_amb_C": 20.0, "T0_C": 38.0, "T_max_C": 84.0,
+            "thermal_horizon_s": 30.0,
+        },
+        "net": {"link_gbps": {"intra": 10.0, "inter": 10.0, "rs": 5.0}, "hop_latency_s": 0.005},
+        "migration": {"timeout_s": 120.0, "switch_s": 0.02},
+        "workload": {
+            "arrival_window_s": 60.0, "rate_per_rs_per_min": 2.0, "p_long": 0.5,
+            "long_out": [18000, 24000], "short_out": [200, 400],
+            "long_pin": 4000, "short_pin": 300, "long_upload_MB": 20, "short_upload_MB": 5,
+        },
+        "slo": {"deadline_factor_long": 2.0, "deadline_factor_short": 4.0, "min_deadline_s": 60.0, "max_stall_frac": 0.1},
+        "policy": {"stall_weight": 1.0},
+        "delivery": "final",
+        "control_period_s": 2.0,
+        "policies": {"discrete_rh_greedy": {"place": "nearest", "migrate": "discrete_rh_greedy", "interval_s": 5.0}},
+        "seeds": [1, 2],
+    }
+    env = simpy.Environment()
+    pol = policies.make_policy({"place": "nearest", "migrate": "discrete_rh_greedy", "interval_s": 0.0})
+    w = CoWorld(env, tr, cfg, pol, seed=1)
+    w.power_model.set_temperature(2, 84.5)
+    r1 = CRequest(i=1, origin=0, t=0.0, long=True, pin=4000, pout=20000, upload_bytes=1e6, deadline=380.0)
+    r1.state = "run"
+    r1.node = 1
+    w.nodes[1].append(r1)
+    cands = pol.migrator._collect_candidates(w, urgent_relay=False)
+    assert [c.dst for c in cands] == [3]
+
+    # Also verify satsim.cosim.run.run() cleanly aggregates dict-valued power_tier_fracs across seeds
+    with tempfile.TemporaryDirectory() as td:
+        tp = Path(td) / "t.json"
+        tp.write_text(json.dumps(tr_dict), encoding="utf-8")
+        cfg["_dir"] = td
+        cfg["trace"] = "t.json"
+        payload = cosim_run(cfg, quiet=True)
+        mean_fracs = payload["mean"]["discrete_rh_greedy"]["power_tier_fracs"]
+        assert isinstance(mean_fracs, dict)
+        assert abs(sum(mean_fracs.values()) - 1.0) < 1e-6
 
 
 def test_snapshot_time_ilp_and_rh_greedy_on_small_snapshot() -> None:

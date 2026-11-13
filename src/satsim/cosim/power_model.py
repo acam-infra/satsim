@@ -80,19 +80,36 @@ class OrbitOnlyPowerModel:
         *,
         trace: object,
         gpu: dict,
+        initial_temp_c: float | None = None,
     ) -> tuple[float, float]:
+        temp = self.t_amb_c if initial_temp_c is None else float(initial_temp_c)
         rem = float(tokens)
         if rem <= 0.0:
-            return (float(start), self.t_amb_c)
+            return (float(start), temp)
         eval_batch = max(int(batch), 1)
         for now, end, dark in trace.power_segments(node, start):
             f = self.f_dark if dark else 1.0
             it = iter_time(eval_batch, context, f, gpu)
             service = rem * it
             if now + service <= end:
-                return (now + service, self.t_amb_c)
+                return (now + service, temp)
             rem -= (end - now) / it
-        return (math.inf, self.t_amb_c)
+        return (math.inf, temp)
+
+    def advance_temp(
+        self,
+        node: int,
+        start: float,
+        dt: float,
+        batch: int,
+        *,
+        trace: object,
+        initial_temp_c: float | None = None,
+    ) -> float:
+        return self.t_amb_c if initial_temp_c is None else float(initial_temp_c)
+
+    def set_temperature(self, node: int, temp_c: float) -> None:
+        return None
 
     def temperature(self, node: int) -> float:
         return self.t_amb_c
@@ -170,10 +187,12 @@ class ContinuousDVFSModel:
         *,
         trace: object,
         gpu: dict,
+        initial_temp_c: float | None = None,
+        initial_throttled: bool | None = None,
     ) -> tuple[float, float]:
         model = self.thermal
-        temp = model.temperature(node)
-        throttled = model._f[node] < 1.0
+        temp = model.temperature(node) if initial_temp_c is None else float(initial_temp_c)
+        throttled = (model._f[node] < 1.0) if initial_throttled is None else bool(initial_throttled)
         rem = float(tokens)
         if rem <= 0.0:
             return (float(start), temp)
@@ -203,6 +222,11 @@ class ContinuousDVFSModel:
                     return (now, temp)
                 rem -= dt / iteration
         return (math.inf, temp)
+
+    def set_temperature(self, node: int, temp_c: float) -> None:
+        self.thermal._T[node] = float(temp_c)
+        if temp_c > self.thermal.peak_T[node]:
+            self.thermal.peak_T[node] = float(temp_c)
 
     def temperature(self, node: int) -> float:
         return self.thermal.temperature(node)
@@ -344,6 +368,72 @@ class DiscreteTierModel:
                 changed.append(j)
         return changed
 
+    def _until_tier_switch(self, temp: float, eq: float, cur_tier_power_w: float, dark: bool) -> float:
+        """Exact analytical RC time until ``select_tier_for_batch`` could change tier."""
+        alpha_p, offset_p, gain_p = self._rc_probe_coeffs
+        if alpha_p <= 0.0:
+            return math.inf
+        t_max = self.spec.t_max_c
+        if eq > temp + 1e-6:
+            t_crit = (t_max - offset_p - gain_p * cur_tier_power_w) / alpha_p
+            if temp < t_crit < eq - 1e-6:
+                return max(self.control_period_s, self.tau_s * math.log((temp - eq) / (t_crit - eq)) + 1e-3)
+            return math.inf
+        if eq < temp - 1e-6:
+            best_cross = math.inf
+            for tk in self.spec.tiers[1:]:
+                if dark and tk.power_w > self.spec.p_dark_w + 1e-9:
+                    continue
+                if tk.power_w <= cur_tier_power_w + 1e-9:
+                    continue
+                t_crit = (t_max - offset_p - gain_p * tk.power_w) / alpha_p
+                if eq + 1e-6 < t_crit < temp:
+                    dt_c = self.tau_s * math.log((temp - eq) / (t_crit - eq)) + 1e-3
+                    if dt_c < best_cross:
+                        best_cross = dt_c
+            return max(self.control_period_s, best_cross) if best_cross < math.inf else math.inf
+        return math.inf
+
+    def advance_temp(
+        self,
+        node: int,
+        start: float,
+        dt: float,
+        batch: int,
+        *,
+        trace: object,
+        initial_temp_c: float | None = None,
+    ) -> float:
+        temp = self._T[node] if initial_temp_c is None else float(initial_temp_c)
+        if dt <= 0.0:
+            return temp
+        target = float(start) + float(dt)
+        for now, end, dark in trace.power_segments(node, float(start)):
+            seg_end = min(end, target)
+            while now < seg_end:
+                if batch <= 0:
+                    p_w = 0.0
+                    until_sw = math.inf
+                else:
+                    tier = select_tier_for_batch(
+                        self.spec,
+                        int(batch),
+                        is_eclipse=dark,
+                        current_temp_c=temp,
+                        rc_step_coeffs=self._rc_probe_coeffs,
+                        explicit_tier_idx=self._explicit_tier_idx[node],
+                    )
+                    p_w = tier.power_w
+                    eq = self.t_amb_c + self.r_th * p_w
+                    until_sw = self._until_tier_switch(temp, eq, p_w, dark)
+                step = min(seg_end - now, until_sw)
+                eq = self.t_amb_c + self.r_th * p_w
+                temp = eq + (temp - eq) * math.exp(-step / self.tau_s)
+                now += step
+            if now >= target:
+                break
+        return temp
+
     def project_finish(
         self,
         node: int,
@@ -354,13 +444,13 @@ class DiscreteTierModel:
         *,
         trace: object,
         gpu: dict,
+        initial_temp_c: float | None = None,
     ) -> tuple[float, float]:
-        temp = self._T[node]
+        temp = self._T[node] if initial_temp_c is None else float(initial_temp_c)
         rem = float(tokens)
         if rem <= 0.0:
             return (float(start), temp)
         eval_batch = max(int(batch), 1)
-        dt_tick = max(1e-3, self.control_period_s)
         for now, end, dark in trace.power_segments(node, start):
             while now < end:
                 tier = select_tier_for_batch(
@@ -373,15 +463,22 @@ class DiscreteTierModel:
                 )
                 it = iter_time(eval_batch, context, tier.clock_f, gpu)
                 service = rem * it
-                dt = min(service, end - now, dt_tick)
                 p_w = 0.0 if batch <= 0 else tier.power_w
-                alpha, offset, gain = rc_linear_coeffs(self.tau_s, self.r_th, self.t_amb_c, dt)
-                temp = alpha * temp + offset + gain * p_w
+                eq = self.t_amb_c + self.r_th * p_w
+                until_sw = self._until_tier_switch(temp, eq, p_w, dark) if batch > 0 else math.inf
+                dt = min(service, end - now, until_sw)
+                temp = eq + (temp - eq) * math.exp(-dt / self.tau_s)
                 now += dt
                 if dt == service:
                     return (now, temp)
                 rem -= dt / it
         return (math.inf, temp)
+
+    def set_temperature(self, node: int, temp_c: float) -> None:
+        val = float(temp_c)
+        self._T[node] = val
+        if val > self._peak_T[node]:
+            self._peak_T[node] = val
 
     def temperature(self, node: int) -> float:
         return self._T[node]

@@ -143,6 +143,10 @@ class CoWorld:
         orbital_f = self.f_dark if self.tr.is_dark(j, self.env.now if t is None else t) else 1.0
         return min(orbital_f, self.thermal_f[j])
 
+    def temperature(self, j: int) -> float:
+        """Current junction temperature in Celsius via unified ``PowerThermalModel`` seam."""
+        return self.power_model.temperature(j)
+
     def thermal_headroom_C(self, j: int) -> float:
         """Temperature margin before the thermal throttle threshold; infinite without a thermal model."""
         return self.power_model.headroom_c(j)

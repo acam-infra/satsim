@@ -277,7 +277,33 @@ def _prior_remaining_s(w, r) -> float:
 def thermal_service_clock(w, j, batch, tokens, context):
     """Estimate the lit decode clock over a batch's service interval from its heat budget."""
     thermal = w.thermal
-    if thermal is None or w.thermal_f[j] < 1:
+    if thermal is None:
+        pm = getattr(w, "power_model", None)
+        if getattr(pm, "mode", "") == "discrete_tiers":
+            from satsim.cosim.power_tiers import select_tier_for_batch
+
+            if tokens <= 0 or batch <= 0:
+                return pm.operating_point(j, batch, is_dark=False).clock_f
+            cur_op = pm.operating_point(j, batch, is_dark=False)
+            high_tier = select_tier_for_batch(pm.spec, max(batch, 1), is_eclipse=False)
+            if cur_op.clock_f < high_tier.clock_f - 1e-9:
+                return cur_op.clock_f
+            eq_temp = pm.t_amb_c + pm.r_th * high_tier.power_w
+            if eq_temp <= pm.spec.t_max_c:
+                return high_tier.clock_f
+            temp = min(pm.temperature(j), pm.spec.t_max_c)
+            time_to_cap = pm.tau_s * math.log((eq_temp - temp) / (eq_temp - pm.spec.t_max_c))
+            full_speed_time = tokens * iter_time(max(batch, 1), context, high_tier.clock_f, w.gpu)
+            if full_speed_time <= time_to_cap:
+                return high_tier.clock_f
+            low_tiers = [
+                t for t in pm.spec.tiers[1:] if pm.t_amb_c + pm.r_th * t.power_w <= pm.spec.t_max_c + 1e-6
+            ]
+            sustain_f = max((t.clock_f for t in low_tiers), default=pm.spec.tiers[1].clock_f)
+            slowed = (full_speed_time - time_to_cap) * (high_tier.clock_f / max(1e-6, sustain_f))
+            return high_tier.clock_f * full_speed_time / (time_to_cap + slowed)
+        return w.thermal_f[j]
+    if w.thermal_f[j] < 1:
         return w.thermal_f[j]
     power = w.device_power(batch, 1.0)
     equilibrium = thermal.T_amb_C + thermal.R_th * power
@@ -352,12 +378,13 @@ class OrbitLoad(Greedy):
         batch = len(w.nodes[j]) + 1 + int(w.reserved[j] > 0)
         context = sum(x.kv for x in w.nodes[j]) + r.pin + tokens / 2 + w.reserved[j] / w.bpt / 2
         start = w.env.now + upload_s
-        if self.thermal_mode in ("rc_const", "rc_staged") and w.thermal is not None:
+        is_disc = getattr(getattr(w, "power_model", None), "mode", "") == "discrete_tiers"
+        if self.thermal_mode in ("rc_const", "rc_staged") and (w.thermal is not None or is_disc):
             return self._delivery_rc(w, r, tokens, j, upload_s, batch, context, start)
         if self.thermal_mode == "off":
             clock = 1.0
         elif self.thermal_mode == "hot_only":
-            clock = w.thermal_f[j] if w.thermal is not None else 1.0
+            clock = w.thermal_f[j] if (w.thermal is not None or is_disc) else 1.0
         else:
             clock = thermal_service_clock(w, j, batch, tokens, context)
         for a, b, dark in w.tr.power_segments(j, start):
@@ -643,13 +670,14 @@ class CoolAware:
     @staticmethod
     def _will_throttle(w, j: int) -> bool:
         """True when resident batch heat load will push node j into thermal throttling before decode ends."""
-        if getattr(w, "thermal", None) is None or not w.nodes[j]:
+        is_disc = getattr(getattr(w, "power_model", None), "mode", "") == "discrete_tiers"
+        if (getattr(w, "thermal", None) is None and not is_disc) or not w.nodes[j]:
             return False
         rem = max((r.remaining for r in w.nodes[j]), default=0.0)
         if rem <= 0.0:
             return False
         ctx = sum(r.kv for r in w.nodes[j])
-        return thermal_service_clock(w, j, len(w.nodes[j]), rem, ctx) < 1.0
+        return thermal_service_clock(w, j, len(w.nodes[j]), rem, ctx) < 1.0 - 1e-6
 
     def _decoded_on_src(self, w, src: int, now: float, dt: float) -> float:
         """Tokens decoded at the source while KV streams across ISLs."""
@@ -692,7 +720,8 @@ class CoolAware:
         extra = r if joining else None
         batch = max(len(w.nodes[node]) + (1 if joining else 0), 1)
         ctx = sum(x.kv for x in w.nodes[node]) + (r.kv if joining else 0.0)
-        if getattr(w, "thermal", None) is not None:
+        is_disc = getattr(getattr(w, "power_model", None), "mode", "") == "discrete_tiers"
+        if getattr(w, "thermal", None) is not None or is_disc:
             f_lit = thermal_service_clock(w, node, batch, left, ctx)
         else:
             f_lit = w.thermal_f[node] if getattr(w, "thermal_f", None) is not None else 1.0
