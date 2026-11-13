@@ -108,6 +108,13 @@ def summarize(w: CoWorld) -> dict:
         "long_p95_all_s": _pct(lat_long_all, 95),
         "throttle_s": float(w.acc.get("throttle_s", 0.0)),
     }
+    urg = [r for r in rs if getattr(r, "urgent", False)]
+    if urg:
+        out["n_urgent"] = len(urg)
+        out["good_urgent_frac"] = sum(1 for r in urg if w.good(r)) / len(urg)
+        norm_long = [r for r in longs if not getattr(r, "urgent", False)]
+        if norm_long:
+            out["good_normal_long_frac"] = sum(1 for r in norm_long if w.good(r)) / len(norm_long)
     if is_discrete_power(w.cfg):
         spec = parse_discrete_power_spec(w.cfg)
         assert spec is not None

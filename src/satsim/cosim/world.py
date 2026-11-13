@@ -73,6 +73,7 @@ class CRequest:
     reaccess_tile_bytes: float = 0.0  # bytes per raw-image tile pull from anchor_node
     tether_s: float = 0.0  # cumulative seconds spent fetching raw-image tiles across ISLs
     tether_bytes: float = 0.0  # cumulative bytes fetched from anchor_node across ISLs
+    urgent: bool = False  # mixed-criticality urgent SLA class
 
     @property
     def reaccess_remaining(self) -> int:
@@ -491,14 +492,21 @@ class CoWorld:
         return True
 
 
-def deadline_for(cfg: dict, t: float, pin: int, pout: int, long: bool) -> float:
+def deadline_for(cfg: dict, t: float, pin: int, pout: int, long: bool, *, urgent: bool = False) -> float:
     """Use a class deadline when configured, otherwise scale isolated decode time."""
-    fixed = cfg["slo"].get("long_deadline_s" if long else "short_deadline_s")
-    if fixed is not None:
+    slo = cfg["slo"]
+    if urgent:
+        ufixed = slo.get("urgent_long_deadline_s" if long else "urgent_short_deadline_s")
+        if ufixed is not None:
+            return t + float(ufixed)
+    fixed = slo.get("long_deadline_s" if long else "short_deadline_s")
+    if fixed is not None and not urgent:
         return t + float(fixed)
     ideal = pout * iter_time(1, pin + pout / 2, 1.0, cfg["gpu"])
-    k = float(cfg["slo"]["deadline_factor_long" if long else "deadline_factor_short"])
-    return t + max(k * ideal, float(cfg["slo"]["min_deadline_s"]))
+    base_key = "deadline_factor_long" if long else "deadline_factor_short"
+    urg_key = "urgent_deadline_factor_long" if long else "urgent_deadline_factor_short"
+    k = float(slo.get(urg_key, slo[base_key]) if urgent else slo[base_key])
+    return t + max(k * ideal, float(slo["min_deadline_s"]))
 
 
 def make_requests(cfg: dict, trace: Trace, seed: int) -> list[CRequest]:
@@ -537,8 +545,16 @@ def make_requests(cfg: dict, trace: Trace, seed: int) -> list[CRequest]:
     out.sort(key=lambda r: (r.t, r.origin))
     agentic_cfg = wl.get("agentic_classes")
     rng_cls = random.Random(seed ^ 0xA6E4) if agentic_cfg else None
+    slo = cfg.get("slo") or {}
+    urgent_frac = float(slo.get("urgent_frac", 0.0))
+    urgent_long_only = bool(slo.get("urgent_long_only", True))
+    rng_urg = random.Random(seed ^ 0x55A7) if urgent_frac > 0.0 else None
     for i, r in enumerate(out):
         r.i = i
+        if rng_urg is not None and (r.long or not urgent_long_only):
+            if rng_urg.random() < urgent_frac:
+                r.urgent = True
+                r.deadline = deadline_for(cfg, r.t, r.pin, r.pout, r.long, urgent=True)
         if agentic_cfg and r.long and rng_cls is not None:
             u = rng_cls.random()
             p_scan = float(agentic_cfg.get("p_scan", 0.35))

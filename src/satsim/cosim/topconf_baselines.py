@@ -43,8 +43,8 @@ def _est_remaining_tokens(w, r, quantile: float = 0.5) -> float:
 def _is_urgent(w, r, now: float, urgent_slack_ratio: float) -> bool:
     """Classify request criticality from explicit tag or remaining slack-to-ideal-decode ratio."""
     explicit_urg = getattr(r, "urgent", None)
-    if explicit_urg is not None:
-        return bool(explicit_urg)
+    if explicit_urg:
+        return True
     crit = getattr(r, "criticality", None)
     if crit is not None:
         return str(crit).lower() in ("hi", "high", "urgent", "critical")
