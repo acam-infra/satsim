@@ -95,3 +95,27 @@ def test_throttle_time_accumulates_per_control_tick():
 def test_throttle_time_is_zero_without_thermal_model():
     w = _world(thermal=False)
     assert summarize(w)["throttle_s"] == 0.0
+
+
+def test_throttle_time_accumulates_for_discrete_tier_model():
+    w = _world(thermal=False)
+    w.cfg["power"] = {
+        "mode": "discrete_tiers",
+        "P_dark": 80.0,
+        "tiers": [
+            {"name": "idle_0w", "power_w": 0.0, "max_batch": 0, "clock_f": 0.0},
+            {"name": "low", "power_w": 75.0, "max_batch": 4, "clock_f": 0.50},
+            {"name": "high", "power_w": 300.0, "max_batch": 12, "clock_f": 1.0},
+        ],
+    }
+    from types import SimpleNamespace
+    from satsim.cosim.power_model import DiscreteTierModel
+
+    w.power_model = DiscreteTierModel(w.cfg, w.tr.n)
+    # Node 0 is idle (0W, clock_f=0.0): must NOT count as throttled.
+    # Node 1 has an active request and explicit low tier (clock_f=0.5 < 1.0): MUST count.
+    w.nodes[1].append(SimpleNamespace(long=True, gen=0.0, kv=100, deadline=1000.0, state="decode", decode_step=None, proc=None))
+    w.power_model.set_explicit_tier(1, 1)
+    w._thermal_tick()
+    assert w.acc["throttle_s"] == pytest.approx(w.period)
+    assert summarize(w)["throttle_s"] == pytest.approx(w.period)
