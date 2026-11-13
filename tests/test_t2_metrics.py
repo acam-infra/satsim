@@ -112,10 +112,9 @@ def test_throttle_time_accumulates_for_discrete_tier_model():
     from satsim.cosim.power_model import DiscreteTierModel
 
     w.power_model = DiscreteTierModel(w.cfg, w.tr.n)
-    # Node 0 is idle (0W, clock_f=0.0): must NOT count as throttled.
-    # Node 1 has an active request and explicit low tier (clock_f=0.5 < 1.0): MUST count.
-    w.nodes[1].append(SimpleNamespace(long=True, gen=0.0, kv=100, deadline=1000.0, state="decode", decode_step=None, proc=None))
-    w.power_model.set_explicit_tier(1, 1)
+    w.power_model.thermal_trip_s = 7.5
+    w.power_model.thermal_trip_count = 2
     w._thermal_tick()
-    assert w.acc["throttle_s"] == pytest.approx(w.period)
-    assert summarize(w)["throttle_s"] == pytest.approx(w.period)
+    assert w.acc["throttle_s"] == pytest.approx(7.5)
+    assert w.acc["thermal_trip_count"] == 2
+    assert summarize(w)["throttle_s"] == pytest.approx(7.5)

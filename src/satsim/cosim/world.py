@@ -198,8 +198,6 @@ class CoWorld:
             for j in self.tr.compute:
                 self.thermal_f[j] = self.power_model._clock_f[j]
                 self.thermal_power_w[j] = self.power_model._power_w[j]
-                if self.thermal_f[j] < 1.0 and len(self.nodes[j]) > 0:
-                    self.acc["throttle_s"] += self.period
             for j in changed:
                 self.poke(j)
             diag = self.power_model.diagnostics()
