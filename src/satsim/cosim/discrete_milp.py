@@ -251,6 +251,7 @@ class DiscreteThermalMigrator(TorchRebalance):
         wakeup_aware_place: bool = False,
         warm_high_reserve: int = 0,
         urg_fast_place: bool = False,
+        slack_link_place: bool = False,
         id_override: str | None = None,
     ):
         if placement is None and not explicit_tier:
@@ -300,10 +301,13 @@ class DiscreteThermalMigrator(TorchRebalance):
         self.wakeup_aware_place = bool(wakeup_aware_place)
         self.warm_high_reserve = int(warm_high_reserve)
         self.urg_fast_place = bool(urg_fast_place)
+        self.slack_link_place = bool(slack_link_place)
         if id_override is not None:
             self.id = str(id_override)
         elif self.explicit_tier:
-            if self.wakeup_aware_place or self.warm_high_reserve > 0 or self.urg_fast_place:
+            if self.slack_link_place:
+                self.id = "discrete_rh_tier_v16"
+            elif self.wakeup_aware_place or self.warm_high_reserve > 0 or self.urg_fast_place:
                 self.id = "discrete_rh_tier_v15"
             elif self.link_aware_isolate:
                 self.id = "discrete_rh_tier_v14"
