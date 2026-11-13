@@ -247,6 +247,7 @@ class DiscreteThermalMigrator(TorchRebalance):
         decode_only_low_tier: bool = False,
         wakeup_aware_mig: bool = False,
         hopeless_mig_guard: bool = False,
+        link_aware_isolate: bool = False,
         id_override: str | None = None,
     ):
         if placement is None and not explicit_tier:
@@ -292,10 +293,13 @@ class DiscreteThermalMigrator(TorchRebalance):
         self.decode_only_low_tier = bool(decode_only_low_tier)
         self.wakeup_aware_mig = bool(wakeup_aware_mig)
         self.hopeless_mig_guard = bool(hopeless_mig_guard)
+        self.link_aware_isolate = bool(link_aware_isolate)
         if id_override is not None:
             self.id = str(id_override)
         elif self.explicit_tier:
-            if self.wakeup_aware_mig or self.hopeless_mig_guard:
+            if self.link_aware_isolate:
+                self.id = "discrete_rh_tier_v14"
+            elif self.wakeup_aware_mig or self.hopeless_mig_guard:
                 self.id = "discrete_rh_tier_v13"
             elif self.strict_evict_urg or self.decode_only_low_tier:
                 self.id = "discrete_rh_tier_v12"
@@ -408,13 +412,18 @@ class DiscreteThermalMigrator(TorchRebalance):
         fc.advance(start_t, horizon_s, len(jobs))
         return fc.temp <= t_max + 1e-6
 
-    def _is_urgent(self, r, w=None, now: float | None = None) -> bool:
-        explicit_urg = getattr(r, "urgent", None)
-        if explicit_urg:
+    def _is_explicit_urgent(self, r) -> bool:
+        """Return True only when request carries an explicit urgent/criticality flag."""
+        if getattr(r, "urgent", None):
             return True
         crit = getattr(r, "criticality", None)
         if crit is not None:
             return str(crit).lower() in ("hi", "high", "urgent", "critical")
+        return False
+
+    def _is_urgent(self, r, w=None, now: float | None = None) -> bool:
+        if self._is_explicit_urgent(r):
+            return True
         if w is not None and now is not None:
             rem_tok = self._est_rem(w, r)
             pin = getattr(r, "pin", getattr(r, "kv", 0))
@@ -576,7 +585,11 @@ class DiscreteThermalMigrator(TorchRebalance):
                     if self.selective_prefill_rescue:
                         pin_tok = max(1.0, float(getattr(r, "pin", 1)))
                         low_stuck = src_in_low and float(getattr(r, "prefill_rem", 0.0)) > 0.25 * pin_tok
-                        urg_pref = (not self.hopeless_mig_guard) and self._is_urgent(r, w, now)
+                        urg_pref = (
+                            self._is_explicit_urgent(r)
+                            if self.link_aware_isolate
+                            else ((not self.hopeless_mig_guard) and self._is_urgent(r, w, now))
+                        )
                         if getattr(r, 'n_recompute', 0) >= 1 or not (n_pref_src >= 2 or low_stuck or urg_pref):
                             continue
                     elif self.prefill_aware_mig:
@@ -729,19 +742,33 @@ class DiscreteThermalMigrator(TorchRebalance):
 
                     def _evict_is_urg(req) -> bool:
                         if self.strict_evict_urg and self.strict_urgent_isolation:
-                            return bool(getattr(req, "urgent", False)) or (
-                                str(getattr(req, "criticality", "")).lower() in ("hi", "high", "urgent", "critical")
-                            )
+                            return self._is_explicit_urgent(req)
                         return self._is_urgent(req, w, now)
 
-                    isolate_lo = (
-                        self.isolate_lo_evict
-                        and (not _evict_is_urg(r))
-                        and any(_evict_is_urg(x) for x in batch)
-                        and len(batch) >= 2
-                        and move_f <= r.deadline
-                        and relief_t > 0.0
-                    )
+                    if self.link_aware_isolate:
+                        link_congested = (mig_mode == "kv") and (
+                            any(edge_users.get(e, 0) > 0 for e in p[1]) or kv_link_s > max(3.0, relief_t)
+                        )
+                        need_relief = (relief_s > 0.01) or (relief_t > kv_link_s)
+                        isolate_lo = (
+                            self.isolate_lo_evict
+                            and (not _evict_is_urg(r))
+                            and any(_evict_is_urg(x) for x in batch)
+                            and len(batch) >= 2
+                            and move_f <= r.deadline
+                            and relief_t > 0.0
+                            and need_relief
+                            and (not link_congested)
+                        )
+                    else:
+                        isolate_lo = (
+                            self.isolate_lo_evict
+                            and (not _evict_is_urg(r))
+                            and any(_evict_is_urg(x) for x in batch)
+                            and len(batch) >= 2
+                            and move_f <= r.deadline
+                            and relief_t > 0.0
+                        )
                     gain = net_slo_gain - link_prob_cost + (net_time_saved / max(1.0, r.deadline - r.t)) * 0.15 + power_bonus + (0.05 if isolate_lo else 0.0)
 
                     if gain > min_gain and (net_time_saved > 0.0 or (empties_src_to_0w and delta_power_w < 0.0) or isolate_lo):
@@ -1018,12 +1045,10 @@ class DiscreteThermalMigrator(TorchRebalance):
             return None
         now = float(w.env.now)
         def _is_explicit_urg(req) -> bool:
-            if self.isolate_lo_evict and not self.strict_evict_urg:
+            if self.isolate_lo_evict and not (self.strict_evict_urg or self.link_aware_isolate):
                 return self._is_urgent(req, w, now)
             if self.strict_urgent_isolation:
-                return bool(getattr(req, "urgent", False)) or (
-                    str(getattr(req, "criticality", "")).lower() in ("hi", "high", "urgent", "critical")
-                )
+                return self._is_explicit_urgent(req)
             return self._is_urgent(req, w, now)
 
         if not hasattr(self.placement, "_delivery"):
@@ -1090,12 +1115,10 @@ class DiscreteThermalMigrator(TorchRebalance):
         tokens = self._expected_tokens(w, r)
 
         def _is_explicit_urg(req) -> bool:
-            if self.isolate_lo_evict and not self.strict_evict_urg:
+            if self.isolate_lo_evict and not (self.strict_evict_urg or self.link_aware_isolate):
                 return self._is_urgent(req, w, now)
             if self.strict_urgent_isolation:
-                return bool(getattr(req, "urgent", False)) or (
-                    str(getattr(req, "criticality", "")).lower() in ("hi", "high", "urgent", "critical")
-                )
+                return self._is_explicit_urgent(req)
             return self._is_urgent(req, w, now)
 
         is_urg = _is_explicit_urg(r)
