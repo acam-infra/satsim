@@ -207,6 +207,8 @@ class CoWorld:
             self.acc[ACC_TIER_UNSAT_S] = diag[ACC_TIER_UNSAT_S]
             self.acc[ACC_WAKEUP_COUNT] = diag[ACC_WAKEUP_COUNT]
             self.acc[ACC_WAKEUP_ENERGY_J] = diag[ACC_WAKEUP_ENERGY_J]
+            self.acc["throttle_s"] = float(diag.get("thermal_trip_s", 0.0))
+            self.acc["thermal_trip_count"] = int(diag.get("thermal_trip_count", 0))
             return
         self.thermal.advance_with_power(now, self.thermal_power_w)
         for j in self.tr.compute:

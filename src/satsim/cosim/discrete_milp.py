@@ -360,14 +360,16 @@ class DiscreteThermalMigrator(TorchRebalance):
 
     def _is_urgent(self, r, w=None, now: float | None = None) -> bool:
         explicit_urg = getattr(r, "urgent", None)
-        if explicit_urg is not None:
-            return bool(explicit_urg)
+        if explicit_urg:
+            return True
         crit = getattr(r, "criticality", None)
         if crit is not None:
             return str(crit).lower() in ("hi", "high", "urgent", "critical")
         if w is not None and now is not None:
             rem_tok = self._est_rem(w, r)
-            ideal_it = iter_time(1, r.pin + r.gen + rem_tok / 2.0, 1.0, w.gpu)
+            pin = getattr(r, "pin", getattr(r, "kv", 0))
+            gen = getattr(r, "gen", 0)
+            ideal_it = iter_time(1, pin + gen + rem_tok / 2.0, 1.0, w.gpu)
             ideal_s = max(1e-6, rem_tok * ideal_it)
             return (r.deadline - now) / ideal_s <= 2.2
         return False
@@ -461,9 +463,14 @@ class DiscreteThermalMigrator(TorchRebalance):
                 if urgent_relay and stay_s > 0.78:
                     continue
 
+                urg_w = 3.0 if self.urgent_isolation else 1.0
+                req_w = urg_w if self._is_urgent(r, w, now) else 1.0
                 rest_src = [x for x in batch if x is not r]
                 without_score, without_fin = self._eval_node_for_mig(w, src, rest_src, now, edge_users)
-                relief_s = sum(without_score[x] - before_score[src][x] for x in rest_src)
+                relief_s = sum(
+                    (urg_w if self._is_urgent(x, w, now) else 1.0) * (without_score[x] - before_score[src][x])
+                    for x in rest_src
+                )
                 relief_t = sum(before_fin[src][x] - without_fin[x] for x in rest_src)
 
                 # Do not skip single-tail requests when 0W drain consolidation is possible
@@ -515,7 +522,10 @@ class DiscreteThermalMigrator(TorchRebalance):
                     after_score, after_fin = self._eval_node_for_mig(w, dst, [*w.nodes[dst], r], now + delay, edge_users)
                     move_s = after_score.pop(r)
                     move_f = after_fin.pop(r)
-                    burden_s = sum(after_score[x] - before_score[dst][x] for x in w.nodes[dst])
+                    burden_s = sum(
+                        (urg_w if self._is_urgent(x, w, now) else 1.0) * (after_score[x] - before_score[dst][x])
+                        for x in w.nodes[dst]
+                    )
                     burden_t = sum(after_fin[x] - before_fin[dst][x] for x in w.nodes[dst])
 
                     tether_s_dst, _ = self._tether_extra_s(w, dst, r, now + delay, edge_users)
@@ -523,7 +533,7 @@ class DiscreteThermalMigrator(TorchRebalance):
                     delta_tether_link_s = max(0.0, tether_s_dst - tether_s_src)
                     kv_link_s = delay * hops
 
-                    net_slo_gain = (move_s - stay_s) + relief_s + burden_s
+                    net_slo_gain = req_w * (move_s - stay_s) + relief_s + burden_s
                     net_time_saved = (stay_f - move_f) + relief_t - burden_t - (kv_link_s + delta_tether_link_s)
                     spread = min(55.0, (r.deadline - r.t) / 6.0)
                     link_prob_cost = (kv_link_s + delta_tether_link_s) / (4.0 * spread)

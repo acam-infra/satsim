@@ -276,6 +276,9 @@ class DiscreteTierModel:
         self.wakeup_count = 0
         self.wakeup_energy_j_total = 0.0
         self._wakeup_ready_t: list[float] = [0.0] * self.n
+        self._thermal_tripped: list[bool] = [False] * self.n
+        self.thermal_trip_count = 0
+        self.thermal_trip_s = 0.0
 
     def wakeup_wait_s(self, node: int, now: float) -> float:
         """Remaining cold-start wakeup latency (seconds) on ``node`` at ``now``."""
@@ -285,7 +288,7 @@ class DiscreteTierModel:
         self._explicit_tier_idx[node] = tier_idx
 
     def _is_throttled(self, node: int, tier_index: int, batch: int, is_dark: bool) -> bool:
-        if self._T[node] >= self.spec.t_max_c:
+        if self._thermal_tripped[node] or self._T[node] >= self.spec.t_max_c:
             return True
         if batch > 0 and not is_dark and tier_index < self.spec.tiers[-1].index:
             return True
@@ -299,6 +302,7 @@ class DiscreteTierModel:
         is_dark: bool,
         t: float | None = None,
     ) -> OperatingPoint:
+        tripped = self._thermal_tripped[node]
         tier = select_tier_for_batch(
             self.spec,
             int(batch),
@@ -306,6 +310,7 @@ class DiscreteTierModel:
             current_temp_c=self._T[node],
             rc_step_coeffs=self._rc_probe_coeffs,
             explicit_tier_idx=self._explicit_tier_idx[node],
+            thermal_trip_lockout=tripped,
         )
         eval_f = effective_clock_f(
             self.spec,
@@ -314,6 +319,7 @@ class DiscreteTierModel:
             current_temp_c=self._T[node],
             rc_step_coeffs=self._rc_probe_coeffs,
             explicit_tier_idx=self._explicit_tier_idx[node],
+            thermal_trip_lockout=tripped,
         )
         throttled = self._is_throttled(node, tier.index, int(batch), is_dark)
         return OperatingPoint(
@@ -339,11 +345,28 @@ class DiscreteTierModel:
         if batch_during_interval > self.spec.tiers[tier_idx].max_batch:
             self.tier_unsat_s += dt
 
+        if self._thermal_tripped[node]:
+            self.thermal_trip_s += dt
         alpha, offset, gain = rc_linear_coeffs(self.tau_s, self.r_th, self.t_amb_c, dt)
         t_next = alpha * self._T[node] + offset + gain * p_w
         self._T[node] = t_next
         if t_next > self._peak_T[node]:
             self._peak_T[node] = t_next
+        hyst = self.spec.thermal_hysteresis_c
+        if hyst > 0.0:
+            if not self._thermal_tripped[node]:
+                # Trip when node hits T_max_C (or next control step at high tier would breach T_max_C).
+                alpha_p, offset_p, gain_p = self._rc_probe_coeffs
+                max_p = self.spec.tiers[-1].power_w
+                would_breach = (
+                    batch_during_interval > 0
+                    and (alpha_p * t_next + offset_p + gain_p * max_p) > self.spec.t_max_c + 1e-9
+                )
+                if t_next >= self.spec.t_max_c - 1e-6 or (would_breach and self._explicit_tier_idx[node] is None):
+                    self._thermal_tripped[node] = True
+                    self.thermal_trip_count += 1
+            elif t_next <= self.spec.t_max_c - hyst:
+                self._thermal_tripped[node] = False
 
     def sync_node(
         self,
@@ -517,6 +540,8 @@ class DiscreteTierModel:
             ACC_TIER_UNSAT_S: float(self.tier_unsat_s),
             ACC_WAKEUP_COUNT: int(self.wakeup_count),
             ACC_WAKEUP_ENERGY_J: float(self.wakeup_energy_j_total),
+            "thermal_trip_count": int(self.thermal_trip_count),
+            "thermal_trip_s": float(self.thermal_trip_s),
         }
 
 

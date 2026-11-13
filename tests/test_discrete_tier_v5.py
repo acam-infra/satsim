@@ -65,3 +65,42 @@ def test_v5_factory_and_thermal_gate():
     # Cool node approaching eclipse within 30s: pre-eclipse sprint stays on high tier (None)
     w_ecl = _make_mock_world(cur_temp=40.0, dark_after_s=20.0)
     assert pol._select_explicit_tier_for_node(w_ecl, 0) is None
+
+
+def test_thermal_trip_hysteresis_lockout():
+    cfg = {
+        "gpu": {"t_fixed_s": 0.003, "t_weights_s": 0.01, "t_kv_tok_s": 1e-7, "t_seq_s": 5e-5, "mem_freq_exp": 0.6},
+        "power": {
+            "mode": "discrete_tiers",
+            "P_dark": 80.0,
+            "tiers": [
+                {"name": "idle_0w", "power_w": 0.0, "max_batch": 0, "clock_f": 0.0},
+                {"name": "low", "power_w": 75.0, "max_batch": 4, "clock_f": 0.50},
+                {"name": "high", "power_w": 300.0, "max_batch": 12, "clock_f": 1.0},
+            ],
+        },
+        "thermal": {"tau_s": 60.0, "R_th": 0.25, "T_amb_C": 20.0, "T0_C": 76.0, "T_max_C": 76.0, "hysteresis_C": 4.0},
+    }
+    pm = DiscreteTierModel(cfg, 1)
+    pm.sync_node(0, 0.0, 2, is_dark=False)
+    # Advance from T0=76.0 -> hits T_max_C threshold and trips into hysteresis lockout
+    pm.sync_node(0, 0.2, 2, is_dark=False, prev_batch=2)
+    assert pm._thermal_tripped[0] is True
+    assert pm.thermal_trip_count == 1
+    # Even if T drops slightly below 76.0 (e.g. 74.0 > 72.0), lockout keeps node on low tier (index 1)
+    pm.set_temperature(0, 74.0)
+    op = pm.operating_point(0, 2, is_dark=False)
+    assert op.tier_index == 1
+    assert op.throttled is True
+    # Once cooled below T_max_C - hysteresis_C = 72.0, lockout clears on next sync
+    pm.set_temperature(0, 71.5)
+    pm.sync_node(0, 4.0, 2, is_dark=False, prev_batch=2)
+    assert pm._thermal_tripped[0] is False
+    assert pm.operating_point(0, 2, is_dark=False).tier_index == 2
+
+
+def test_is_urgent_dynamic_fallback_when_explicit_false():
+    pol = make_policy({"policy": "discrete_rh_tier_v5"})
+    w = _make_mock_world(cur_temp=40.0)
+    req_false = SimpleNamespace(long=True, pin=1000, pout=2000, gen=0, remaining=2000, kv=1000, deadline=5.0, urgent=False)
+    assert pol._is_urgent(req_false, w, now=0.0) is True

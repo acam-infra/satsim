@@ -83,6 +83,7 @@ def main() -> None:
     ]
     mc_cfg["thermal"]["tau_s"] = 60.0
     mc_cfg["thermal"]["T_max_C"] = 76.0
+    mc_cfg["thermal"]["hysteresis_C"] = 4.0
     mc_cfg["slo"]["urgent_frac"] = 0.25
     mc_cfg["slo"]["urgent_deadline_factor_long"] = 1.55
     mc_cfg["slo"]["deadline_factor_long"] = 2.60

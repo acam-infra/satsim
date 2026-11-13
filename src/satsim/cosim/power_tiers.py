@@ -63,6 +63,7 @@ class DiscretePowerSpec:
     prefer_high_clock: bool = True
     wakeup_energy_j: float = 0.0
     wakeup_latency_s: float = 0.0
+    thermal_hysteresis_c: float = 0.0
 
     @property
     def idle_tier(self) -> PowerTier:
@@ -163,6 +164,9 @@ def parse_discrete_power_spec(cfg: dict) -> DiscretePowerSpec | None:
     wakeup_latency_s = float(power.get("wakeup_latency_s", 0.0))
     if wakeup_energy_j < 0.0 or wakeup_latency_s < 0.0:
         raise ValueError("power.wakeup_energy_j and power.wakeup_latency_s must be non-negative")
+    hyst_c = float(thermal.get("hysteresis_C", 0.0))
+    if hyst_c < 0.0:
+        raise ValueError("thermal.hysteresis_C must be non-negative")
 
     return DiscretePowerSpec(
         tiers=tuple(reindexed),
@@ -172,6 +176,7 @@ def parse_discrete_power_spec(cfg: dict) -> DiscretePowerSpec | None:
         prefer_high_clock=prefer_high_clock,
         wakeup_energy_j=wakeup_energy_j,
         wakeup_latency_s=wakeup_latency_s,
+        thermal_hysteresis_c=hyst_c,
     )
 
 
@@ -233,6 +238,7 @@ def select_tier_for_batch(
     rc_step_coeffs: tuple[float, float, float] | None = None,
     explicit_tier_idx: int | None = None,
     prefer_high_clock: bool | None = None,
+    thermal_trip_lockout: bool = False,
 ) -> PowerTier:
     """Deterministic runtime governor mapping resident ``batch`` to an active ``PowerTier``.
 
@@ -257,7 +263,9 @@ def select_tier_for_batch(
     if not work:
         work = [min(spec.work_tiers, key=lambda t: t.power_w)]
 
-    if current_temp_c is not None and rc_step_coeffs is not None:
+    if thermal_trip_lockout:
+        work = [min(work, key=lambda t: t.power_w)]
+    elif current_temp_c is not None and rc_step_coeffs is not None:
         alpha, offset, gain = rc_step_coeffs
         thermally_safe = [
             t for t in work if alpha * current_temp_c + offset + gain * t.power_w <= spec.t_max_c + 1e-9
@@ -290,6 +298,7 @@ def effective_clock_f(
     rc_step_coeffs: tuple[float, float, float] | None = None,
     explicit_tier_idx: int | None = None,
     prefer_high_clock: bool | None = None,
+    thermal_trip_lockout: bool = False,
 ) -> float:
     """Return strictly positive decode ``clock_f > 0`` for resident or hypothetical ``batch``.
 
@@ -307,5 +316,6 @@ def effective_clock_f(
         rc_step_coeffs=rc_step_coeffs,
         explicit_tier_idx=explicit_tier_idx,
         prefer_high_clock=prefer_high_clock,
+        thermal_trip_lockout=thermal_trip_lockout,
     )
     return tier.clock_f
