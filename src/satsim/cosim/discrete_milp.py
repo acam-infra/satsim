@@ -245,6 +245,8 @@ class DiscreteThermalMigrator(TorchRebalance):
         isolate_lo_evict: bool = False,
         strict_evict_urg: bool = False,
         decode_only_low_tier: bool = False,
+        wakeup_aware_mig: bool = False,
+        hopeless_mig_guard: bool = False,
         id_override: str | None = None,
     ):
         if placement is None and not explicit_tier:
@@ -288,10 +290,14 @@ class DiscreteThermalMigrator(TorchRebalance):
         self.isolate_lo_evict = bool(isolate_lo_evict)
         self.strict_evict_urg = bool(strict_evict_urg)
         self.decode_only_low_tier = bool(decode_only_low_tier)
+        self.wakeup_aware_mig = bool(wakeup_aware_mig)
+        self.hopeless_mig_guard = bool(hopeless_mig_guard)
         if id_override is not None:
             self.id = str(id_override)
         elif self.explicit_tier:
-            if self.strict_evict_urg or self.decode_only_low_tier:
+            if self.wakeup_aware_mig or self.hopeless_mig_guard:
+                self.id = "discrete_rh_tier_v13"
+            elif self.strict_evict_urg or self.decode_only_low_tier:
                 self.id = "discrete_rh_tier_v12"
             elif self.dwell_thermal_gate or self.isolate_lo_evict:
                 self.id = "discrete_rh_tier_v11"
@@ -570,7 +576,8 @@ class DiscreteThermalMigrator(TorchRebalance):
                     if self.selective_prefill_rescue:
                         pin_tok = max(1.0, float(getattr(r, "pin", 1)))
                         low_stuck = src_in_low and float(getattr(r, "prefill_rem", 0.0)) > 0.25 * pin_tok
-                        if getattr(r, 'n_recompute', 0) >= 1 or not (n_pref_src >= 2 or low_stuck or self._is_urgent(r, w, now)):
+                        urg_pref = (not self.hopeless_mig_guard) and self._is_urgent(r, w, now)
+                        if getattr(r, 'n_recompute', 0) >= 1 or not (n_pref_src >= 2 or low_stuck or urg_pref):
                             continue
                     elif self.prefill_aware_mig:
                         continue
@@ -675,13 +682,27 @@ class DiscreteThermalMigrator(TorchRebalance):
                     feasible += 1
                     n_d = len(w.nodes[dst])
                     wakes_dst_from_0w = n_d == 0
-                    p_dst_before = self._node_power_w(w, dst, n_d, now + delay)
-                    p_dst_after = self._node_power_w(w, dst, n_d + 1, now + delay)
+                    wake_s = 0.0
+                    if (
+                        self.wakeup_aware_mig
+                        and wakes_dst_from_0w
+                        and spec is not None
+                        and spec.wakeup_latency_s > 0.0
+                        and pm is not None
+                        and hasattr(pm, "_tier_idx")
+                        and pm._tier_idx[dst] == 0
+                    ):
+                        wake_s = float(spec.wakeup_latency_s)
+                    exec_delay = delay + wake_s
+                    p_dst_before = self._node_power_w(w, dst, n_d, now + exec_delay)
+                    p_dst_after = self._node_power_w(w, dst, n_d + 1, now + exec_delay)
                     delta_power_w = (p_src_after - p_src_before) + (p_dst_after - p_dst_before)
 
-                    after_score, after_fin = self._eval_node_for_mig(w, dst, [*w.nodes[dst], r], now + delay, edge_users)
+                    after_score, after_fin = self._eval_node_for_mig(w, dst, [*w.nodes[dst], r], now + exec_delay, edge_users)
                     move_s = after_score.pop(r)
                     move_f = after_fin.pop(r)
+                    if self.hopeless_mig_guard and not empties_src_to_0w and stay_s < 0.02 and move_s < 0.02 and relief_s < 0.03:
+                        continue
                     burden_s = sum(
                         (urg_w if self._is_urgent(x, w, now) else 1.0) * (after_score[x] - before_score[dst][x])
                         for x in w.nodes[dst]
@@ -727,7 +748,7 @@ class DiscreteThermalMigrator(TorchRebalance):
                         if hops == 1:
                             has_good_1hop = True
                         def _make_marginal(
-                            _dst=dst, _r=r, _delay=delay, _stay_s=stay_s, _stay_f=stay_f,
+                            _dst=dst, _r=r, _delay=exec_delay, _stay_s=stay_s, _stay_f=stay_f,
                             _relief_s=relief_s, _relief_t=relief_t, _link_s=kv_link_s + delta_tether_link_s,
                             _p_src_delta=p_src_after - p_src_before, _empties=empties_src_to_0w,
                         ):
