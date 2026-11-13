@@ -15,7 +15,8 @@ def _tiny_cfg(isl_gbps: float = 1.0, t_prefill_tok_s: float = 0.005) -> dict:
     repo = Path(__file__).resolve().parents[1]
     cfg = load_config(repo / "configs/cosim_discrete_power_w53_v1.yaml")
     cfg["gpu"]["t_prefill_tok_s"] = t_prefill_tok_s
-    cfg["net"]["isl_gbps"] = isl_gbps
+    cfg["net"]["link_gbps"]["intra"] = isl_gbps
+    cfg["net"]["link_gbps"]["inter"] = isl_gbps
     cfg["power"]["min_dwell_s"] = 20.0
     cfg["power"]["tiers"] = [
         {"name": "idle_0w", "power_w": 0.0, "max_batch": 0, "clock_f": 0.0},

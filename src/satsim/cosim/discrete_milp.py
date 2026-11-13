@@ -241,6 +241,8 @@ class DiscreteThermalMigrator(TorchRebalance):
         selective_prefill_rescue: bool = False,
         prefill_traj_aware: bool = False,
         safe_urg_mix_order: bool = False,
+        dwell_thermal_gate: bool = False,
+        isolate_lo_evict: bool = False,
         id_override: str | None = None,
     ):
         if placement is None and not explicit_tier:
@@ -280,10 +282,14 @@ class DiscreteThermalMigrator(TorchRebalance):
         self.selective_prefill_rescue = bool(selective_prefill_rescue)
         self.prefill_traj_aware = bool(prefill_traj_aware)
         self.safe_urg_mix_order = bool(safe_urg_mix_order)
+        self.dwell_thermal_gate = bool(dwell_thermal_gate)
+        self.isolate_lo_evict = bool(isolate_lo_evict)
         if id_override is not None:
             self.id = str(id_override)
         elif self.explicit_tier:
-            if self.selective_prefill_rescue or self.prefill_traj_aware or self.safe_urg_mix_order:
+            if self.dwell_thermal_gate or self.isolate_lo_evict:
+                self.id = "discrete_rh_tier_v11"
+            elif self.selective_prefill_rescue or self.prefill_traj_aware or self.safe_urg_mix_order:
                 self.id = "discrete_rh_tier_v10"
             elif self.prefill_dwell_place or self.dwell_aware_tier or self.prefill_aware_mig:
                 self.id = "discrete_rh_tier_v9"
@@ -694,9 +700,17 @@ class DiscreteThermalMigrator(TorchRebalance):
                         if spec is not None and spec.wakeup_energy_j > 0.0:
                             power_bonus -= (spec.wakeup_energy_j / max(1.0, ref_power_w * 10.0)) * self.energy_weight
 
-                    gain = net_slo_gain - link_prob_cost + (net_time_saved / max(1.0, r.deadline - r.t)) * 0.15 + power_bonus
+                    isolate_lo = (
+                        self.isolate_lo_evict
+                        and (not self._is_urgent(r, w, now))
+                        and any(self._is_urgent(x, w, now) for x in batch)
+                        and len(batch) >= 2
+                        and move_f <= r.deadline
+                        and relief_t > 0.0
+                    )
+                    gain = net_slo_gain - link_prob_cost + (net_time_saved / max(1.0, r.deadline - r.t)) * 0.15 + power_bonus + (0.05 if isolate_lo else 0.0)
 
-                    if gain > min_gain and (net_time_saved > 0.0 or (empties_src_to_0w and delta_power_w < 0.0)):
+                    if gain > min_gain and (net_time_saved > 0.0 or (empties_src_to_0w and delta_power_w < 0.0) or isolate_lo):
                         if hops == 1:
                             has_good_1hop = True
                         def _make_marginal(
@@ -801,9 +815,9 @@ class DiscreteThermalMigrator(TorchRebalance):
             return None
         alpha, offset, gain = pm._rc_probe_coeffs
         eff_ratio = self.tier_slack_ratio
+        thermal_gate = cur_t >= spec.t_max_c - 4.0
         if self.thermal_precool_horizon_s > 0.0:
             # Gate proactive low-tier pre-cooling: only step down when approaching thermal cap.
-            thermal_gate = cur_t >= spec.t_max_c - 4.0
             if not thermal_gate and hasattr(pm, "advance_temp"):
                 saved = pm._explicit_tier_idx[node]
                 pm.set_explicit_tier(node, None)
@@ -823,6 +837,16 @@ class DiscreteThermalMigrator(TorchRebalance):
 
         has_conn = hasattr(w.tr, "next_conn")
         high_tier = max(spec.work_tiers, key=lambda t: (t.clock_f, t.power_w))
+        low_tier = min(spec.work_tiers, key=lambda t: (t.power_w, t.index))
+        if (
+            self.dwell_thermal_gate
+            and spec.min_dwell_s > 0.0
+            and low_tier.effective_prefill_f < high_tier.effective_prefill_f - 0.1
+            and not is_dark
+            and live
+            and not thermal_gate
+        ):
+            return None
         it_high = iter_time(batch, ctx, high_tier.clock_f, w.gpu) if self.delivery_aware_tier else 0.0
 
         for tk in sorted(spec.work_tiers, key=lambda t: (t.power_w, t.index)):
@@ -959,6 +983,8 @@ class DiscreteThermalMigrator(TorchRebalance):
             return None
         now = float(w.env.now)
         def _is_explicit_urg(req) -> bool:
+            if self.isolate_lo_evict:
+                return self._is_urgent(req, w, now)
             if self.strict_urgent_isolation:
                 return bool(getattr(req, "urgent", False)) or (
                     str(getattr(req, "criticality", "")).lower() in ("hi", "high", "urgent", "critical")
@@ -1029,6 +1055,8 @@ class DiscreteThermalMigrator(TorchRebalance):
         tokens = self._expected_tokens(w, r)
 
         def _is_explicit_urg(req) -> bool:
+            if self.isolate_lo_evict:
+                return self._is_urgent(req, w, now)
             if self.strict_urgent_isolation:
                 return bool(getattr(req, "urgent", False)) or (
                     str(getattr(req, "criticality", "")).lower() in ("hi", "high", "urgent", "critical")

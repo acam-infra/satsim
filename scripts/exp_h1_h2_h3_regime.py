@@ -41,13 +41,15 @@ POLICIES = {
     "discrete_rh_tier_v8": {"policy": "discrete_rh_tier_v8"},
     "discrete_rh_tier_v9": {"policy": "discrete_rh_tier_v9"},
     "discrete_rh_tier_v10": {"policy": "discrete_rh_tier_v10"},
+    "discrete_rh_tier_v11": {"policy": "discrete_rh_tier_v11"},
 }
 
 
 def _make_cfg(base_cfg: dict, *, t_prefill: float, min_dwell: float, isl_gbps: float, dl_long: float, dl_urg: float) -> dict:
     cfg = copy.deepcopy(base_cfg)
     cfg["gpu"]["t_prefill_tok_s"] = t_prefill
-    cfg["net"]["isl_gbps"] = isl_gbps
+    cfg["net"]["link_gbps"]["intra"] = isl_gbps
+    cfg["net"]["link_gbps"]["inter"] = isl_gbps
     cfg["power"]["P_dark"] = 80.0
     cfg["power"]["wakeup_energy_j"] = 2500.0
     cfg["power"]["wakeup_latency_s"] = 3.0
