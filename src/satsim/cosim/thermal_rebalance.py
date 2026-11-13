@@ -10,10 +10,10 @@ from satsim.method.engine.timing import iter_time
 
 
 class ThermalRebalance:
-    def __init__(self, placement: dict, externality: bool = True, interval_s: float = 30.0,
+    def __init__(self, placement: dict | None = None, externality: bool = True, interval_s: float = 30.0,
                  deadline_aware: bool = True, thermal_aware: bool | str = True,
                  max_inflight: int | None = None, max_mig_per_req: int | None = None):
-        self.placement = make_policy(placement)
+        self.placement = make_policy(placement) if placement is not None else None
         self.externality = externality
         self.deadline_aware = deadline_aware
         self.thermal_aware = thermal_aware
@@ -24,7 +24,7 @@ class ThermalRebalance:
         self.max_mig_per_req = 1 if max_mig_per_req is None else int(max_mig_per_req)
 
     def place(self, w, r):
-        return self.placement.place(w, r)
+        return self.placement.place(w, r) if self.placement is not None else None if self.placement is not None else None
 
     @staticmethod
     def _remaining(w, r):
@@ -36,7 +36,8 @@ class ThermalRebalance:
         active = sorted(((self._remaining(w, r), r.i, r) for r in jobs))
         previous = 0.0
         result = {}
-        forecast = ThermalForecast(w, node) if self.rc_forecast and w.thermal is not None else None
+        has_pm = getattr(w, "power_model", None) is not None
+        forecast = ThermalForecast(w, node) if self.rc_forecast and (has_pm or w.thermal is not None) else None
         for i, (target, _, r) in enumerate(active):
             step = target - previous
             rest = active[i:]
@@ -125,8 +126,12 @@ class ThermalForecast:
     def __init__(self, world, node):
         self.w = world
         self.node = node
+        self.power_model = getattr(world, "power_model", None)
         self.model = world.thermal
-        self.temp = self.model.temperature(node)
+        if self.power_model is not None:
+            self.temp = self.power_model.temperature(node)
+        else:
+            self.temp = self.model.temperature(node)
         self.throttled = world.thermal_f[node] < 1
 
     def advance(self, start, dt, batch):
@@ -137,8 +142,8 @@ class ThermalForecast:
         at the far end of the interval and whether the throttle state flipped.
         """
         w, model = self.w, self.model
-        if dt <= 0:
-            return start
+        if dt <= 0 or model is None:
+            return start + max(0.0, dt) if model is None else start
         target = start + dt
         for now, end, dark in w.tr.power_segments(self.node, start):
             orbit_clock = w.f_dark if dark else 1.0
@@ -164,6 +169,18 @@ class ThermalForecast:
         return target
 
     def finish(self, start, batch, context, tokens):
+        if self.power_model is not None:
+            finish_t, end_temp = self.power_model.project_finish(
+                self.node,
+                start,
+                batch,
+                context,
+                tokens,
+                trace=self.w.tr,
+                gpu=self.w.gpu,
+            )
+            self.temp = end_temp
+            return finish_t
         w, model = self.w, self.model
         for now, end, dark in w.tr.power_segments(self.node, start):
             orbit_clock = w.f_dark if dark else 1.0
@@ -277,7 +294,7 @@ class TorchRebalance:
 
     def __init__(
         self,
-        placement: dict,
+        placement: dict | None = None,
         interval_s: float = 5.0,
         max_inflight: int = 24,
         max_mig_per_req: int = 4,
@@ -290,7 +307,7 @@ class TorchRebalance:
         from satsim.cosim.policies import candidates as place_candidates
 
         self._place_candidates = place_candidates
-        self.placement = make_policy(placement)
+        self.placement = make_policy(placement) if placement is not None else None
         self.interval_s = interval_s
         self.next_plan = interval_s
         self.max_inflight = max_inflight
@@ -344,7 +361,7 @@ class TorchRebalance:
                         if viable_waiting >= max(4, avail_slots):
                             return None
 
-        return self.placement.place(w, r)
+        return self.placement.place(w, r) if self.placement is not None else None
 
     @staticmethod
     def _mean_rem(w, r) -> float:
@@ -373,7 +390,8 @@ class TorchRebalance:
             return [0.0], [start]
         active = sorted(((self._mean_rem(w, r), r.i, r) for r in jobs))
         previous = 0.0
-        forecast = ThermalForecast(w, node) if w.thermal is not None else None
+        has_pm = getattr(w, "power_model", None) is not None
+        forecast = ThermalForecast(w, node) if (has_pm or w.thermal is not None) else None
         t_cur = start
         xs = [0.0]
         ts = [start]
