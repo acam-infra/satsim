@@ -1224,6 +1224,43 @@ def _make_discrete_rh_tier_v14(**kw):
     return DiscreteThermalMigrator(**kw)
 
 
+def _make_discrete_rh_tier_v15(**kw):
+    from satsim.cosim.discrete_milp import DiscreteThermalMigrator, IncrementalGreedySolver
+
+    kw.setdefault("solver", IncrementalGreedySolver())
+    kw.setdefault("explicit_tier", True)
+    kw.setdefault("on_arrival_tier", True)
+    kw.setdefault("low_tier_pack", False)
+    kw.setdefault("tier_slack_ratio", 0.45)
+    kw.setdefault("suppress_low_tier_self_mig", True)
+    kw.setdefault("urgent_tier_guard", True)
+    kw.setdefault("eclipse_lookahead_s", 30.0)
+    kw.setdefault("thermal_precool_horizon_s", 30.0)
+    kw.setdefault("soft_thermal_gate", True)
+    kw.setdefault("urgent_isolation", True)
+    kw.setdefault("strict_urgent_isolation", True)
+    kw.setdefault("delivery_aware_tier", True)
+    kw.setdefault("prefill_burst", True)
+    kw.setdefault("recompute_aware", True)
+    kw.setdefault("prefill_dwell_place", True)
+    kw.setdefault("dwell_aware_tier", True)
+    kw.setdefault("selective_prefill_rescue", True)
+    kw.setdefault("prefill_traj_aware", True)
+    kw.setdefault("safe_urg_mix_order", False)
+    kw.setdefault("dwell_thermal_gate", True)
+    kw.setdefault("isolate_lo_evict", True)
+    kw.setdefault("strict_evict_urg", True)
+    kw.setdefault("decode_only_low_tier", True)
+    kw.setdefault("wakeup_aware_mig", True)
+    kw.setdefault("hopeless_mig_guard", True)
+    kw.setdefault("link_aware_isolate", True)
+    kw.setdefault("wakeup_aware_place", True)
+    kw.setdefault("warm_high_reserve", 2)
+    kw.setdefault("urg_fast_place", True)
+    kw.setdefault("id_override", "discrete_rh_tier_v15")
+    return DiscreteThermalMigrator(**kw)
+
+
 def _make_discrete_step_milp(**kw):
     from satsim.cosim.discrete_milp import DiscreteThermalMigrator, StepMilpSolver
 
@@ -1293,6 +1330,7 @@ MIGRATORS = {
     "discrete_rh_tier_v12": _make_discrete_rh_tier_v12,
     "discrete_rh_tier_v13": _make_discrete_rh_tier_v13,
     "discrete_rh_tier_v14": _make_discrete_rh_tier_v14,
+    "discrete_rh_tier_v15": _make_discrete_rh_tier_v15,
     "discrete_step_milp": _make_discrete_step_milp,
     "llumnix_style_mig_only": _make_llumnix_style_mig_only,
     "tapas_reactive_thermal": _make_tapas_reactive_thermal,

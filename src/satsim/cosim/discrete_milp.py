@@ -248,6 +248,9 @@ class DiscreteThermalMigrator(TorchRebalance):
         wakeup_aware_mig: bool = False,
         hopeless_mig_guard: bool = False,
         link_aware_isolate: bool = False,
+        wakeup_aware_place: bool = False,
+        warm_high_reserve: int = 0,
+        urg_fast_place: bool = False,
         id_override: str | None = None,
     ):
         if placement is None and not explicit_tier:
@@ -294,10 +297,15 @@ class DiscreteThermalMigrator(TorchRebalance):
         self.wakeup_aware_mig = bool(wakeup_aware_mig)
         self.hopeless_mig_guard = bool(hopeless_mig_guard)
         self.link_aware_isolate = bool(link_aware_isolate)
+        self.wakeup_aware_place = bool(wakeup_aware_place)
+        self.warm_high_reserve = int(warm_high_reserve)
+        self.urg_fast_place = bool(urg_fast_place)
         if id_override is not None:
             self.id = str(id_override)
         elif self.explicit_tier:
-            if self.link_aware_isolate:
+            if self.wakeup_aware_place or self.warm_high_reserve > 0 or self.urg_fast_place:
+                self.id = "discrete_rh_tier_v15"
+            elif self.link_aware_isolate:
                 self.id = "discrete_rh_tier_v14"
             elif self.wakeup_aware_mig or self.hopeless_mig_guard:
                 self.id = "discrete_rh_tier_v13"
@@ -552,6 +560,7 @@ class DiscreteThermalMigrator(TorchRebalance):
         min_gain = 0.10 if urgent_relay else 0.04
 
         candidates: list[CandidateMove] = []
+        path_cache: dict[tuple[int, int], list] = {}
         for src, batch in w.nodes.items():
             long_batch = [r for r in batch if r.long]
             if not long_batch:
@@ -623,7 +632,11 @@ class DiscreteThermalMigrator(TorchRebalance):
                 for dst in dst_candidates:
                     if dst == src or not w.fits(dst, r):
                         continue
-                    paths = k_shortest_paths(w.tr, src, dst, now, k=self.k_paths)
+                    p_key = (src, dst)
+                    paths = path_cache.get(p_key)
+                    if paths is None:
+                        paths = k_shortest_paths(w.tr, src, dst, now, k=self.k_paths)
+                        path_cache[p_key] = paths
                     for p in paths:
                         if not p[1]:
                             continue
@@ -909,6 +922,20 @@ class DiscreteThermalMigrator(TorchRebalance):
             and not thermal_gate
         ):
             return None
+        if (
+            self.warm_high_reserve > 0
+            and not is_dark
+            and not thermal_gate
+            and batch <= 1
+            and spec.min_dwell_s > 0.0
+        ):
+            warm_high = sum(
+                1
+                for k in w.tr.compute
+                if w.nodes[k] and not w.tr.is_dark(k, now) and pm._tier_idx[k] != low_tier.index
+            )
+            if warm_high <= self.warm_high_reserve:
+                return None
         it_high = iter_time(batch, ctx, high_tier.clock_f, w.gpu) if self.delivery_aware_tier else 0.0
 
         for tk in sorted(spec.work_tiers, key=lambda t: (t.power_w, t.index)):
@@ -1168,9 +1195,15 @@ class DiscreteThermalMigrator(TorchRebalance):
                 fin = start + wake_s + prefill_s + tokens * w.iter_of(j, r)
 
             miss = 1 if fin > r.deadline else 0
+            wakes_0w = 1 if (has_dwell and len(w.nodes[j]) == 0 and pm._tier_idx[j] == 0) else 0
             urg_mix = 1 if (any(not _is_explicit_urg(x) for x in w.nodes[j]) if is_urg else any(_is_explicit_urg(x) for x in w.nodes[j])) else 0
             if self.safe_urg_mix_order:
                 score = (miss, dark, hot, low_locked, 1 if n_pref > 1 else 0, urg_mix, in_low, fin, len(w.nodes[j]), j)
+            elif self.urg_fast_place and is_urg:
+                score = (miss, urg_mix, low_locked, dark, hot, 1 if n_pref > 1 else 0, wakes_0w, in_low, fin, len(w.nodes[j]), j)
+            elif self.wakeup_aware_place and not is_urg:
+                pref_crowd = 1 if n_pref > 2 else 0
+                score = (miss, urg_mix, low_locked, dark, hot, wakes_0w, pref_crowd, in_low, fin, len(w.nodes[j]), j)
             else:
                 score = (miss, urg_mix, low_locked, dark, hot, 1 if n_pref > 1 else 0, in_low, fin, len(w.nodes[j]), j)
             if best_score is None or score < best_score:
