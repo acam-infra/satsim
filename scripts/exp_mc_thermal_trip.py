@@ -46,6 +46,7 @@ POLICIES = {
     "discrete_rh_greedy": {"policy": "discrete_rh_greedy", "placement": {"policy": "orbit_load"}},
     "discrete_rh_tier_v3": {"policy": "discrete_rh_tier_v3"},
     "discrete_rh_tier_v4": {"policy": "discrete_rh_tier_v4"},
+    "discrete_rh_tier_v5": {"policy": "discrete_rh_tier_v5"},
 }
 
 
@@ -83,7 +84,7 @@ def main() -> None:
     mc_cfg["thermal"]["tau_s"] = 60.0
     mc_cfg["thermal"]["T_max_C"] = 76.0
     mc_cfg["slo"]["urgent_frac"] = 0.25
-    mc_cfg["slo"]["urgent_deadline_factor_long"] = 1.25
+    mc_cfg["slo"]["urgent_deadline_factor_long"] = 1.55
     mc_cfg["slo"]["deadline_factor_long"] = 2.60
 
     tasks = [

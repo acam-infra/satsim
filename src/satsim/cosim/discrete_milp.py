@@ -228,6 +228,8 @@ class DiscreteThermalMigrator(TorchRebalance):
         suppress_low_tier_self_mig: bool = False,
         urgent_tier_guard: bool = False,
         eclipse_lookahead_s: float = 0.0,
+        thermal_precool_horizon_s: float = 0.0,
+        urgent_isolation: bool = False,
         id_override: str | None = None,
     ):
         if placement is None and low_tier_pack and not explicit_tier:
@@ -254,10 +256,14 @@ class DiscreteThermalMigrator(TorchRebalance):
         self.suppress_low_tier_self_mig = bool(suppress_low_tier_self_mig)
         self.urgent_tier_guard = bool(urgent_tier_guard)
         self.eclipse_lookahead_s = float(eclipse_lookahead_s)
+        self.thermal_precool_horizon_s = float(thermal_precool_horizon_s)
+        self.urgent_isolation = bool(urgent_isolation)
         if id_override is not None:
             self.id = str(id_override)
         elif self.explicit_tier:
-            if self.eclipse_lookahead_s > 0.0:
+            if self.thermal_precool_horizon_s > 0.0 or self.urgent_isolation:
+                self.id = "discrete_rh_tier_v5"
+            elif self.eclipse_lookahead_s > 0.0:
                 self.id = "discrete_rh_tier_v4"
             elif self.suppress_low_tier_self_mig or self.tier_slack_ratio > 0.0 or self.urgent_tier_guard:
                 self.id = "discrete_rh_tier_v3"
@@ -624,6 +630,21 @@ class DiscreteThermalMigrator(TorchRebalance):
         ):
             return None
         alpha, offset, gain = pm._rc_probe_coeffs
+        if self.thermal_precool_horizon_s > 0.0:
+            # Gate proactive low-tier pre-cooling: only step down when approaching thermal cap or eclipse.
+            high_power = max(t.power_w for t in spec.work_tiers)
+            eclipse_gate = approaching_dark and spec.p_dark_w < high_power - 1e-9
+            thermal_gate = cur_t >= spec.t_max_c - 4.0
+            if not thermal_gate and hasattr(pm, "advance_temp"):
+                saved = pm._explicit_tier_idx[node]
+                pm.set_explicit_tier(node, None)
+                try:
+                    t_proj = pm.advance_temp(node, now, self.thermal_precool_horizon_s, batch, trace=w.tr)
+                finally:
+                    pm.set_explicit_tier(node, saved)
+                thermal_gate = t_proj >= spec.t_max_c - 2.0
+            if not (eclipse_gate or thermal_gate):
+                return None
         ctx = sum(x.kv + self._est_rem(w, x) / 2.0 for x in jobs)
         eff_ratio = self.tier_slack_ratio
         if self.eclipse_lookahead_s > 0.0 and cur_t >= spec.t_max_c - 8.0:
@@ -720,11 +741,39 @@ class DiscreteThermalMigrator(TorchRebalance):
                 best_node = j
         return best_node
 
+    def _urgent_isolated_place(self, w, r) -> int | None:
+        from satsim.cosim.policies import upload_options
+
+        now = float(w.env.now)
+        is_urg = self._is_urgent(r)
+        best_score = None
+        best_node: int | None = None
+        for j, upload_s in upload_options(w, r):
+            start = now + upload_s
+            dark = bool(w.tr.is_dark(j, start))
+            has_urg = any(self._is_urgent(x) for x in w.nodes[j])
+            load = len(w.nodes[j]) + (1 if w.reserved[j] > 0 else 0)
+            temp_c = self._node_temp_c(w, j)
+            if is_urg:
+                # Urgent requests prefer sunlit, low-load, cool, and already-warmed (or low-temp) nodes.
+                score = (dark, load, temp_c, upload_s, j)
+            else:
+                # Normal requests avoid nodes currently running urgent requests unless no other node fits.
+                score = (has_urg, dark, load, temp_c, upload_s, j)
+            if best_score is None or score < best_score:
+                best_score = score
+                best_node = j
+        return best_node
+
     def place(self, w, r):
         if self.low_tier_pack:
             packed = self._low_tier_pack_place(w, r)
             if packed is not None:
                 return packed
+        if self.urgent_isolation:
+            isolated = self._urgent_isolated_place(w, r)
+            if isolated is not None:
+                return isolated
         return super().place(w, r)
 
     def _run_rebalance(self, w, urgent_relay: bool = False):
