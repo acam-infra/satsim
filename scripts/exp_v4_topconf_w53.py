@@ -36,7 +36,7 @@ METRICS = [
 POLICIES = {
     "place_once": {"place": "orbit_thermal", "migrate": "none"},
     "least_loaded": {"place": "least_loaded", "migrate": "none"},
-    "cool_aware": {"policy": "cool_aware", "placement": {"policy": "orbit_load"}},
+    "cool_aware": {"place": "orbit_load", "migrate": "cool_aware"},
     "deadline_rc": {"policy": "thermal_rebalance", "placement": {"policy": "orbit_load"}, "thermal_aware": "rc"},
     "llumnix_style_mig_only": {"policy": "llumnix_style_mig_only"},
     "tapas_reactive_thermal": {"policy": "tapas_reactive_thermal"},
@@ -85,6 +85,11 @@ def main() -> None:
     for sc_name, cfg in [("w53_baseline", base_cfg), ("w53_nonheat_wakeup", nh_cfg)]:
         for pol in POLICIES:
             tasks.append({"scenario": sc_name, "policy": pol, "seed": 11, "cfg": cfg, "trace_path": trace_path})
+
+    from satsim.cosim.policies import make_policy
+    for pname, pspec in POLICIES.items():
+        make_policy(pspec)
+    print(f"Validated {len(POLICIES)} policies; launching {len(tasks)} runs...", flush=True)
 
     out_dir = repo_root / "out" / "exp_v4_topconf_w53"
     out_dir.mkdir(parents=True, exist_ok=True)
