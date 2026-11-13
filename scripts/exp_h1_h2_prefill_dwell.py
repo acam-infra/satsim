@@ -14,15 +14,14 @@ from satsim.cosim.trace import Trace
 METRICS = [
     "good_long_frac",
     "good_urgent_frac",
-    "badput_frac",
+    "waste_ratio",
     "goodput_tok_s",
     "energy_kj_total",
     "zero_power_frac",
-    "net_bytes_gb_hop",
+    "link_GB_hops",
     "migrations",
     "wakeup_count",
     "throttle_s",
-    "thermal_trip_count",
 ]
 
 POLICIES = {
@@ -36,6 +35,8 @@ POLICIES = {
     "discrete_rh_greedy": {"policy": "discrete_rh_greedy"},
     "discrete_rh_tier_v6": {"policy": "discrete_rh_tier_v6"},
     "discrete_rh_tier_v7": {"policy": "discrete_rh_tier_v7"},
+    "discrete_rh_tier_v8": {"policy": "discrete_rh_tier_v8"},
+    "discrete_rh_tier_v9": {"policy": "discrete_rh_tier_v9"},
 }
 
 

@@ -235,6 +235,9 @@ class DiscreteThermalMigrator(TorchRebalance):
         delivery_aware_tier: bool = False,
         prefill_burst: bool = False,
         recompute_aware: bool = False,
+        prefill_dwell_place: bool = False,
+        dwell_aware_tier: bool = False,
+        prefill_aware_mig: bool = False,
         id_override: str | None = None,
     ):
         if placement is None and not explicit_tier:
@@ -268,10 +271,15 @@ class DiscreteThermalMigrator(TorchRebalance):
         self.delivery_aware_tier = bool(delivery_aware_tier)
         self.prefill_burst = bool(prefill_burst)
         self.recompute_aware = bool(recompute_aware)
+        self.prefill_dwell_place = bool(prefill_dwell_place)
+        self.dwell_aware_tier = bool(dwell_aware_tier)
+        self.prefill_aware_mig = bool(prefill_aware_mig)
         if id_override is not None:
             self.id = str(id_override)
         elif self.explicit_tier:
-            if self.recompute_aware:
+            if self.prefill_dwell_place or self.dwell_aware_tier or self.prefill_aware_mig:
+                self.id = "discrete_rh_tier_v9"
+            elif self.recompute_aware:
                 self.id = "discrete_rh_tier_v8"
             elif self.prefill_burst:
                 self.id = "discrete_rh_tier_v7"
@@ -473,6 +481,12 @@ class DiscreteThermalMigrator(TorchRebalance):
 
             for r in long_batch:
                 if r.migrating or r.n_mig >= self.max_mig_per_req or now >= r.deadline:
+                    continue
+                if (
+                    self.prefill_aware_mig
+                    and not (src_dark or src_thr)
+                    and (getattr(r, "state", "") == "prefill" or getattr(r, "prefill_rem", 0.0) > 1e-9)
+                ):
                     continue
                 stay_s = before_score[src][r]
                 stay_f = before_fin[src][r]
@@ -742,6 +756,14 @@ class DiscreteThermalMigrator(TorchRebalance):
                     deliv_high = w.tr.next_conn(x.origin, node, high_end)
                     eff_end = deliv_tk if deliv_tk < 1e15 else dec_end
                     same_contact = deliv_tk < 1e15 and deliv_high < 1e15 and deliv_tk <= deliv_high + 1e-6
+                    if (
+                        self.dwell_aware_tier
+                        and spec.min_dwell_s > 0.0
+                        and tk.power_w < high_tier.power_w - 1e-9
+                        and dec_end > x.deadline - max(margin, 0.5 * spec.min_dwell_s)
+                    ):
+                        all_safe = False
+                        break
                     if eff_end > x.deadline - margin and not same_contact:
                         all_safe = False
                         break
@@ -898,7 +920,89 @@ class DiscreteThermalMigrator(TorchRebalance):
                 best_node = j
         return best_node if best_node is not None else base_dst
 
+    def _prefill_dwell_place(self, w, r) -> int | None:
+        from satsim.cosim.policies import upload_options
+
+        t_prefill_tok_s = float(w.gpu.get("t_prefill_tok_s", 0.0))
+        if t_prefill_tok_s <= 0.0 or r.pin <= 0:
+            return None
+        opts = list(upload_options(w, r))
+        if not opts:
+            return None
+        now = float(w.env.now)
+        pm = getattr(w, "power_model", None)
+        spec = self._spec(w)
+        low_tier = min(spec.work_tiers, key=lambda t: (t.power_w, t.index)) if (spec and spec.work_tiers) else None
+        high_tier = max(spec.work_tiers, key=lambda t: (t.power_w, t.index)) if (spec and spec.work_tiers) else None
+        has_dwell = pm is not None and spec is not None and low_tier is not None and hasattr(pm, "_tier_idx")
+        tokens = self._expected_tokens(w, r)
+
+        def _is_explicit_urg(req) -> bool:
+            if self.strict_urgent_isolation:
+                return bool(getattr(req, "urgent", False)) or (
+                    str(getattr(req, "criticality", "")).lower() in ("hi", "high", "urgent", "critical")
+                )
+            return self._is_urgent(req, w, now)
+
+        is_urg = _is_explicit_urg(r)
+        best_score = None
+        best_node: int | None = None
+        for j, upload_s in opts:
+            start = now + upload_s
+            dark = 1 if w.tr.is_dark(j, start) else 0
+            hot = 1 if (pm is not None and spec is not None and float(pm.temperature(j)) >= spec.t_max_c - 4.0) else 0
+            n_pref = 1 + sum(
+                1 for x in w.nodes[j] if getattr(x, "state", "") == "prefill" or getattr(x, "prefill_rem", 0.0) > 1e-9
+            )
+            wake_s = 0.0
+            low_locked = 0
+            in_low = 0
+            if has_dwell:
+                if len(w.nodes[j]) == 0 and pm._tier_idx[j] == 0:
+                    wake_s = float(spec.wakeup_latency_s)
+                if pm._tier_idx[j] == low_tier.index:
+                    in_low = 1
+                    dwell_rem = max(0.0, float(spec.min_dwell_s) - (start - float(pm._tier_entered_t[j])))
+                    if dwell_rem > 1e-6:
+                        low_locked = 1
+                    low_pf = max(1e-6, float(low_tier.effective_prefill_f))
+                    high_pf = max(1e-6, float(high_tier.effective_prefill_f)) if high_tier else 1.0
+                    if dark:
+                        dark_tiers = [t for t in spec.work_tiers if t.power_w <= spec.p_dark_w + 1e-9]
+                        if dark_tiers:
+                            high_pf = max(1e-6, float(max(dark_tiers, key=lambda t: t.effective_prefill_f).effective_prefill_f))
+                    tok_during_dwell = min(float(r.pin), dwell_rem * low_pf / (t_prefill_tok_s * n_pref))
+                    t_dwell_used = tok_during_dwell * t_prefill_tok_s * n_pref / low_pf
+                    rem_pin = max(0.0, float(r.pin) - tok_during_dwell)
+                    prefill_s = t_dwell_used + rem_pin * t_prefill_tok_s * n_pref / high_pf
+                else:
+                    pf = max(1e-6, float(high_tier.effective_prefill_f)) if high_tier else 1.0
+                    if dark:
+                        dark_tiers = [t for t in spec.work_tiers if t.power_w <= spec.p_dark_w + 1e-9]
+                        if dark_tiers:
+                            pf = max(1e-6, float(max(dark_tiers, key=lambda t: t.effective_prefill_f).effective_prefill_f))
+                    prefill_s = float(r.pin) * t_prefill_tok_s * n_pref / pf
+            else:
+                prefill_s = float(r.pin) * t_prefill_tok_s * n_pref / max(1e-6, w.prefill_f_of(j, start))
+
+            if hasattr(self.placement, "_delivery"):
+                fin = self.placement._delivery(w, r, tokens, j, upload_s + wake_s + prefill_s)
+            else:
+                fin = start + wake_s + prefill_s + tokens * w.iter_of(j, r)
+
+            miss = 1 if fin > r.deadline else 0
+            urg_mix = 1 if (any(not _is_explicit_urg(x) for x in w.nodes[j]) if is_urg else any(_is_explicit_urg(x) for x in w.nodes[j])) else 0
+            score = (miss, urg_mix, low_locked, dark, hot, 1 if n_pref > 1 else 0, in_low, fin, len(w.nodes[j]), j)
+            if best_score is None or score < best_score:
+                best_score = score
+                best_node = j
+        return best_node
+
     def place(self, w, r):
+        if self.prefill_dwell_place:
+            pd_dst = self._prefill_dwell_place(w, r)
+            if pd_dst is not None:
+                return pd_dst
         if self.low_tier_pack:
             packed = self._low_tier_pack_place(w, r)
             if packed is not None:

@@ -129,3 +129,31 @@ def test_v7_prefill_burst_holds_high_during_prefill_then_drops_to_low() -> None:
     req.prefill_rem = 0.0
     req.state = "decode"
     assert pol._select_explicit_tier_for_node(w, c0) == 1
+
+
+def test_v9_prefill_dwell_place_avoids_low_locked_node_and_protects_prefill_mig() -> None:
+    pol = make_policy({"policy": "discrete_rh_tier_v9"})
+    assert pol.id == "discrete_rh_tier_v9"
+    assert pol.prefill_dwell_place is True
+    assert pol.dwell_aware_tier is True
+    assert pol.prefill_aware_mig is True
+
+    cfg = _base_cfg(min_dwell_s=20.0, t_prefill_tok_s=0.005)
+    tr = _tiny_trace()
+    env = simpy.Environment()
+    w = CoWorld(env, tr, cfg, pol)
+
+    # Lock compute[0] in low tier (tier_idx=1) at t=0, then submit at t=2 (within 20s dwell)
+    from satsim.cosim.policies import upload_options
+
+    req = CRequest(i=0, origin=tr.rs[0], t=2.0, long=True, pin=4000, pout=1000, upload_bytes=0.0, deadline=200.0)
+    opts = list(upload_options(w, req))
+    assert len(opts) >= 2
+    locked_node = opts[0][0]
+    w.power_model._tier_idx[locked_node] = 1
+    w.power_model._tier_entered_t[locked_node] = 0.0
+    env.run(until=2.0)
+
+    chosen = pol.place(w, req)
+    assert chosen is not None
+    assert chosen != locked_node
