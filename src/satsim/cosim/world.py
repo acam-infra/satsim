@@ -74,6 +74,7 @@ class CRequest:
     tether_s: float = 0.0  # cumulative seconds spent fetching raw-image tiles across ISLs
     tether_bytes: float = 0.0  # cumulative bytes fetched from anchor_node across ISLs
     urgent: bool = False  # mixed-criticality urgent SLA class
+    prefill_rem: float = 0.0  # remaining input prompt tokens to prefill when t_prefill_tok_s > 0
 
     @property
     def reaccess_remaining(self) -> int:
@@ -145,6 +146,14 @@ class CoWorld:
             ).clock_f
         orbital_f = self.f_dark if self.tr.is_dark(j, self.env.now if t is None else t) else 1.0
         return min(orbital_f, self.thermal_f[j])
+
+    def prefill_f_of(self, j: int, t: float | None = None) -> float:
+        if isinstance(self.power_model, DiscreteTierModel):
+            now = self.env.now if t is None else t
+            return self.power_model.operating_point(
+                j, len(self.nodes[j]), is_dark=self.tr.is_dark(j, now), t=now
+            ).effective_prefill_f
+        return self.f_of(j, t=t)
 
     def temperature(self, j: int) -> float:
         """Current junction temperature in Celsius via unified ``PowerThermalModel`` seam."""
@@ -239,7 +248,7 @@ class CoWorld:
 
     def poke(self, j: int) -> None:
         for r in list(self.nodes[j]):
-            if r.state == "decode" and r.decode_step is not None and r.proc is not None and r.proc.is_alive:
+            if r.state in ("prefill", "decode") and r.decode_step is not None and r.proc is not None and r.proc.is_alive:
                 try:
                     r.proc.interrupt()
                 except RuntimeError:
@@ -307,7 +316,10 @@ class CoWorld:
             r.anchor_node = j
         r.trail.append(j)
         r.t_admit = self.env.now
-        r.state = "decode"
+        t_prefill_tok_s = float(self.gpu.get("t_prefill_tok_s", 0.0))
+        has_prefill = t_prefill_tok_s > 0.0 and r.pin > 0
+        r.prefill_rem = float(r.pin) if has_prefill else 0.0
+        r.state = "prefill" if has_prefill else "decode"
         prev_b = len(self.nodes[j])
         self.nodes[j].append(r)
         if hasattr(self.policy, "on_arrival"):
@@ -315,6 +327,38 @@ class CoWorld:
         self._sync_discrete_node(j, prev_b)
         self.poke(j)
         self.log("admit", req=r.i, node=j)
+
+        while r.prefill_rem > 1e-9:  # prefill
+            j = r.node
+            if isinstance(self.power_model, DiscreteTierModel):
+                wake_wait = self.power_model.wakeup_wait_s(j, self.env.now)
+                if wake_wait > 0.0:
+                    try:
+                        yield self.env.timeout(wake_wait)
+                    except simpy.Interrupt:
+                        pass
+                    continue
+            pf = max(1e-6, self.prefill_f_of(j))
+            n_pref = max(1, sum(1 for x in self.nodes[j] if x.state == "prefill"))
+            pt = t_prefill_tok_s * n_pref / pf
+            step = min(CHUNK_S, pt * r.prefill_rem)
+            t0, p0 = self.env.now, r.prefill_rem
+            r.decode_step = (t0, pt)
+            try:
+                yield self.env.timeout(max(step, 1e-9))
+            except simpy.Interrupt:
+                pass
+            r.decode_step = None
+            dt = self.env.now - t0
+            r.prefill_rem = max(0.0, p0 - (dt / pt if pt > 0 else 0.0))
+            if self.stream and dt > 0:
+                r.stall_s += self.tr.disconnected_time(r.origin, j, t0, self.env.now)
+        if has_prefill:
+            r.state = "decode"
+            if hasattr(self.policy, "on_prefill_done"):
+                self.policy.on_prefill_done(self, r.node, r)
+            self._sync_discrete_node(r.node, len(self.nodes[r.node]))
+            self.poke(r.node)
 
         while r.remaining > 1e-9:  # decode
             j = r.node

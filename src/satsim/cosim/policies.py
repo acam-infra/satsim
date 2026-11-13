@@ -1017,9 +1017,12 @@ def _make_discrete_rh_tier_v7(**kw):
     kw.setdefault("suppress_low_tier_self_mig", True)
     kw.setdefault("urgent_tier_guard", True)
     kw.setdefault("eclipse_lookahead_s", 30.0)
-    kw.setdefault("thermal_precool_horizon_s", 0.0)
+    kw.setdefault("thermal_precool_horizon_s", 30.0)
+    kw.setdefault("soft_thermal_gate", True)
     kw.setdefault("urgent_isolation", True)
+    kw.setdefault("strict_urgent_isolation", True)
     kw.setdefault("delivery_aware_tier", True)
+    kw.setdefault("prefill_burst", True)
     kw.setdefault("id_override", "discrete_rh_tier_v7")
     return DiscreteThermalMigrator(**kw)
 

@@ -233,6 +233,7 @@ class DiscreteThermalMigrator(TorchRebalance):
         soft_thermal_gate: bool = False,
         strict_urgent_isolation: bool = False,
         delivery_aware_tier: bool = False,
+        prefill_burst: bool = False,
         id_override: str | None = None,
     ):
         if placement is None and low_tier_pack and not explicit_tier:
@@ -264,10 +265,13 @@ class DiscreteThermalMigrator(TorchRebalance):
         self.soft_thermal_gate = bool(soft_thermal_gate)
         self.strict_urgent_isolation = bool(strict_urgent_isolation)
         self.delivery_aware_tier = bool(delivery_aware_tier)
+        self.prefill_burst = bool(prefill_burst)
         if id_override is not None:
             self.id = str(id_override)
         elif self.explicit_tier:
-            if self.soft_thermal_gate or self.strict_urgent_isolation:
+            if self.prefill_burst:
+                self.id = "discrete_rh_tier_v7"
+            elif self.soft_thermal_gate or self.strict_urgent_isolation:
                 self.id = "discrete_rh_tier_v6"
             elif self.thermal_precool_horizon_s > 0.0 or self.urgent_isolation:
                 self.id = "discrete_rh_tier_v5"
@@ -637,6 +641,11 @@ class DiscreteThermalMigrator(TorchRebalance):
         if not jobs:
             return None
         now = float(w.env.now)
+        if self.prefill_burst and any(
+            getattr(x, "state", "") == "prefill" or getattr(x, "prefill_rem", 0.0) > 1e-9
+            for x in jobs
+        ):
+            return None
         live = [x for x in jobs if x.deadline > now]
         if self.urgent_tier_guard and any(self._is_urgent(x, w, now) for x in (live if self.delivery_aware_tier else jobs)):
             return None
@@ -726,6 +735,10 @@ class DiscreteThermalMigrator(TorchRebalance):
 
     def on_arrival(self, w, node: int, r) -> None:
         if self.explicit_tier and self.on_arrival_tier:
+            self._update_explicit_tiers(w, [node])
+
+    def on_prefill_done(self, w, node: int, r) -> None:
+        if self.explicit_tier and (self.on_arrival_tier or self.prefill_burst):
             self._update_explicit_tiers(w, [node])
 
     def _low_tier_pack_place(self, w, r) -> int | None:

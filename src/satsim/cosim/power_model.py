@@ -267,6 +267,8 @@ class DiscreteTierModel:
         self._tier_idx = [0] * self.n
         self._power_w = [0.0] * self.n
         self._clock_f = [self.spec.tiers[-1].clock_f] * self.n
+        self._prefill_clock_f = [self.spec.tiers[-1].effective_prefill_f] * self.n
+        self._tier_entered_t = [0.0] * self.n
         self._explicit_tier_idx: list[int | None] = [None] * self.n
 
         self.zero_power_s = 0.0
@@ -381,9 +383,37 @@ class DiscreteTierModel:
         interval_batch = new_batch if prev_batch is None else prev_batch
         self._advance_node(node, now, int(interval_batch))
         prev_f = self._clock_f[node]
+        prev_pf = self._prefill_clock_f[node]
         prev_tier = self._tier_idx[node]
         op = self.operating_point(node, int(new_batch), is_dark=is_dark, t=now)
         new_tier = int(op.tier_index if op.tier_index is not None else 0)
+        if (
+            self.spec.min_dwell_s > 0.0
+            and prev_tier > 0
+            and new_tier > 0
+            and new_tier != prev_tier
+            and (float(now) - self._tier_entered_t[node]) < self.spec.min_dwell_s - 1e-9
+        ):
+            prev_t_obj = self.spec.tiers[prev_tier]
+            alpha_p, offset_p, gain_p = self._rc_probe_coeffs
+            prev_t_next = alpha_p * self._T[node] + offset_p + gain_p * prev_t_obj.power_w
+            prev_feasible = (
+                not self._thermal_tripped[node]
+                and prev_t_obj.max_batch >= int(new_batch)
+                and (not is_dark or prev_t_obj.power_w <= self.spec.p_dark_w + 1e-9)
+                and prev_t_next <= self.spec.t_max_c + 1e-9
+            )
+            if prev_feasible:
+                new_tier = prev_tier
+                op = OperatingPoint(
+                    power_w=prev_t_obj.power_w,
+                    clock_f=prev_t_obj.clock_f,
+                    prefill_clock_f=prev_t_obj.prefill_clock_f if new_batch > 0 else None,
+                    tier_index=prev_tier,
+                    throttled=self._is_throttled(node, prev_tier, int(new_batch), is_dark),
+                )
+        if new_tier != prev_tier:
+            self._tier_entered_t[node] = float(now)
         if prev_tier == 0 and new_tier > 0:
             self.wakeup_count += 1
             if self.spec.wakeup_energy_j > 0.0:
@@ -394,7 +424,8 @@ class DiscreteTierModel:
         self._tier_idx[node] = new_tier
         self._power_w[node] = op.power_w
         self._clock_f[node] = op.clock_f
-        return op.clock_f != prev_f
+        self._prefill_clock_f[node] = op.effective_prefill_f
+        return op.clock_f != prev_f or op.effective_prefill_f != prev_pf
 
     def step(
         self,

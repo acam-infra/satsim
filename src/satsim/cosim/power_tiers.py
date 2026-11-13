@@ -64,6 +64,7 @@ class DiscretePowerSpec:
     wakeup_energy_j: float = 0.0
     wakeup_latency_s: float = 0.0
     thermal_hysteresis_c: float = 0.0
+    min_dwell_s: float = 0.0
 
     @property
     def idle_tier(self) -> PowerTier:
@@ -167,6 +168,9 @@ def parse_discrete_power_spec(cfg: dict) -> DiscretePowerSpec | None:
     hyst_c = float(thermal.get("hysteresis_C", 0.0))
     if hyst_c < 0.0:
         raise ValueError("thermal.hysteresis_C must be non-negative")
+    min_dwell_s = float(power.get("min_dwell_s", 0.0))
+    if min_dwell_s < 0.0:
+        raise ValueError("power.min_dwell_s must be non-negative")
 
     return DiscretePowerSpec(
         tiers=tuple(reindexed),
@@ -177,6 +181,7 @@ def parse_discrete_power_spec(cfg: dict) -> DiscretePowerSpec | None:
         wakeup_energy_j=wakeup_energy_j,
         wakeup_latency_s=wakeup_latency_s,
         thermal_hysteresis_c=hyst_c,
+        min_dwell_s=min_dwell_s,
     )
 
 
