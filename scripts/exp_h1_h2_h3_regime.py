@@ -24,7 +24,7 @@ METRICS = [
     "recompute_mig",
     "wakeup_count",
     "throttle_s",
-    "thermal_trip_count",
+    "peak_temp_C",
 ]
 
 POLICIES = {
