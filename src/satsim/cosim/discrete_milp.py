@@ -1197,7 +1197,29 @@ class DiscreteThermalMigrator(TorchRebalance):
             miss = 1 if fin > r.deadline else 0
             wakes_0w = 1 if (has_dwell and len(w.nodes[j]) == 0 and pm._tier_idx[j] == 0) else 0
             urg_mix = 1 if (any(not _is_explicit_urg(x) for x in w.nodes[j]) if is_urg else any(_is_explicit_urg(x) for x in w.nodes[j])) else 0
-            if self.safe_urg_mix_order:
+            if self.slack_link_place:
+                wake_pen = 1.5 * wakes_0w if self.wakeup_aware_place else 0.0
+                if is_urg:
+                    if miss == 0:
+                        eff_fin = fin + 0.5 * upload_s + 2.0 * hot + 1.5 * low_locked + 1.0 * urg_mix + wake_pen
+                    else:
+                        eff_fin = fin + 0.5 * upload_s
+                else:
+                    if miss == 0:
+                        eff_fin = (
+                            fin
+                            + 0.5 * upload_s
+                            + 4.0 * urg_mix
+                            + 2.0 * low_locked
+                            + 1.5 * dark
+                            + 2.0 * hot
+                            + wake_pen
+                            + (1.0 if n_pref > 1 else 0.0)
+                        )
+                    else:
+                        eff_fin = fin + 0.5 * upload_s + 2.0 * urg_mix
+                score = (miss, round(eff_fin, 6), round(fin, 6), len(w.nodes[j]), j)
+            elif self.safe_urg_mix_order:
                 score = (miss, dark, hot, low_locked, 1 if n_pref > 1 else 0, urg_mix, in_low, fin, len(w.nodes[j]), j)
             elif self.urg_fast_place and is_urg:
                 score = (miss, urg_mix, low_locked, dark, hot, 1 if n_pref > 1 else 0, wakes_0w, in_low, fin, len(w.nodes[j]), j)
