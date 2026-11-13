@@ -243,6 +243,8 @@ class DiscreteThermalMigrator(TorchRebalance):
         safe_urg_mix_order: bool = False,
         dwell_thermal_gate: bool = False,
         isolate_lo_evict: bool = False,
+        strict_evict_urg: bool = False,
+        decode_only_low_tier: bool = False,
         id_override: str | None = None,
     ):
         if placement is None and not explicit_tier:
@@ -284,10 +286,14 @@ class DiscreteThermalMigrator(TorchRebalance):
         self.safe_urg_mix_order = bool(safe_urg_mix_order)
         self.dwell_thermal_gate = bool(dwell_thermal_gate)
         self.isolate_lo_evict = bool(isolate_lo_evict)
+        self.strict_evict_urg = bool(strict_evict_urg)
+        self.decode_only_low_tier = bool(decode_only_low_tier)
         if id_override is not None:
             self.id = str(id_override)
         elif self.explicit_tier:
-            if self.dwell_thermal_gate or self.isolate_lo_evict:
+            if self.strict_evict_urg or self.decode_only_low_tier:
+                self.id = "discrete_rh_tier_v12"
+            elif self.dwell_thermal_gate or self.isolate_lo_evict:
                 self.id = "discrete_rh_tier_v11"
             elif self.selective_prefill_rescue or self.prefill_traj_aware or self.safe_urg_mix_order:
                 self.id = "discrete_rh_tier_v10"
@@ -700,10 +706,17 @@ class DiscreteThermalMigrator(TorchRebalance):
                         if spec is not None and spec.wakeup_energy_j > 0.0:
                             power_bonus -= (spec.wakeup_energy_j / max(1.0, ref_power_w * 10.0)) * self.energy_weight
 
+                    def _evict_is_urg(req) -> bool:
+                        if self.strict_evict_urg and self.strict_urgent_isolation:
+                            return bool(getattr(req, "urgent", False)) or (
+                                str(getattr(req, "criticality", "")).lower() in ("hi", "high", "urgent", "critical")
+                            )
+                        return self._is_urgent(req, w, now)
+
                     isolate_lo = (
                         self.isolate_lo_evict
-                        and (not self._is_urgent(r, w, now))
-                        and any(self._is_urgent(x, w, now) for x in batch)
+                        and (not _evict_is_urg(r))
+                        and any(_evict_is_urg(x) for x in batch)
                         and len(batch) >= 2
                         and move_f <= r.deadline
                         and relief_t > 0.0
@@ -840,6 +853,7 @@ class DiscreteThermalMigrator(TorchRebalance):
         low_tier = min(spec.work_tiers, key=lambda t: (t.power_w, t.index))
         if (
             self.dwell_thermal_gate
+            and not self.decode_only_low_tier
             and spec.min_dwell_s > 0.0
             and low_tier.effective_prefill_f < high_tier.effective_prefill_f - 0.1
             and not is_dark
@@ -983,7 +997,7 @@ class DiscreteThermalMigrator(TorchRebalance):
             return None
         now = float(w.env.now)
         def _is_explicit_urg(req) -> bool:
-            if self.isolate_lo_evict:
+            if self.isolate_lo_evict and not self.strict_evict_urg:
                 return self._is_urgent(req, w, now)
             if self.strict_urgent_isolation:
                 return bool(getattr(req, "urgent", False)) or (
@@ -1055,7 +1069,7 @@ class DiscreteThermalMigrator(TorchRebalance):
         tokens = self._expected_tokens(w, r)
 
         def _is_explicit_urg(req) -> bool:
-            if self.isolate_lo_evict:
+            if self.isolate_lo_evict and not self.strict_evict_urg:
                 return self._is_urgent(req, w, now)
             if self.strict_urgent_isolation:
                 return bool(getattr(req, "urgent", False)) or (
