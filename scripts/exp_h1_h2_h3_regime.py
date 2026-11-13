@@ -14,11 +14,11 @@ from satsim.cosim.trace import Trace
 METRICS = [
     "good_long_frac",
     "good_urgent_frac",
-    "badput_frac",
+    "waste_ratio",
     "goodput_tok_s",
     "energy_kj_total",
     "zero_power_frac",
-    "net_bytes_gb_hop",
+    "link_GB_hops",
     "migrations",
     "mig_abort",
     "recompute_mig",
@@ -29,13 +29,18 @@ METRICS = [
 
 POLICIES = {
     "place_once": {"place": "orbit_thermal", "migrate": "none"},
+    "least_loaded": {"place": "least_loaded", "migrate": "none"},
+    "cool_aware": {"policy": "thermal_rebalance", "placement": {"policy": "orbit_load"}, "thermal_aware": "cool_aware"},
     "deadline_rc": {"policy": "thermal_rebalance", "placement": {"policy": "orbit_load"}, "thermal_aware": "rc"},
     "llumnix_style_mig_only": {"policy": "llumnix_style_mig_only"},
+    "tapas_reactive_thermal": {"policy": "tapas_reactive_thermal"},
     "mcs_slack_dvfs_no_mig": {"policy": "mcs_slack_dvfs_no_mig"},
     "discrete_rh_greedy": {"policy": "discrete_rh_greedy"},
     "discrete_rh_tier_v6": {"policy": "discrete_rh_tier_v6"},
     "discrete_rh_tier_v7": {"policy": "discrete_rh_tier_v7"},
     "discrete_rh_tier_v8": {"policy": "discrete_rh_tier_v8"},
+    "discrete_rh_tier_v9": {"policy": "discrete_rh_tier_v9"},
+    "discrete_rh_tier_v10": {"policy": "discrete_rh_tier_v10"},
 }
 
 
@@ -115,7 +120,7 @@ def main() -> None:
                 f"[{r['scenario']}] {r['policy']:24s} SLO={r['good_long_frac']*100:6.2f}% "
                 f"URG={((r.get('good_urgent_frac') or 0.0)*100):6.2f}% "
                 f"E={r['energy_kj_total']:8.1f}kJ mig={r['migrations']:4d} "
-                f"rec={r['recompute_mig']:3d} net={r.get('net_bytes_gb_hop') or 0:7.1f}GBh ({r['wall_s']}s)",
+                f"rec={r['recompute_mig']:3d} net={r.get('link_GB_hops') or 0:7.1f}GBh ({r['wall_s']}s)",
                 flush=True,
             )
 

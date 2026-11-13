@@ -18,7 +18,7 @@ from satsim.cosim.power_tiers import (
     rollout_rc_temperatures,
     select_tier_for_batch,
 )
-from satsim.cosim.thermal_rebalance import ThermalForecast, TorchRebalance, k_shortest_paths
+from satsim.cosim.thermal_rebalance import QUANTILES, ThermalForecast, TorchRebalance, _interp_linear, k_shortest_paths
 from satsim.method.engine.timing import iter_time
 
 
@@ -238,6 +238,9 @@ class DiscreteThermalMigrator(TorchRebalance):
         prefill_dwell_place: bool = False,
         dwell_aware_tier: bool = False,
         prefill_aware_mig: bool = False,
+        selective_prefill_rescue: bool = False,
+        prefill_traj_aware: bool = False,
+        safe_urg_mix_order: bool = False,
         id_override: str | None = None,
     ):
         if placement is None and not explicit_tier:
@@ -274,10 +277,15 @@ class DiscreteThermalMigrator(TorchRebalance):
         self.prefill_dwell_place = bool(prefill_dwell_place)
         self.dwell_aware_tier = bool(dwell_aware_tier)
         self.prefill_aware_mig = bool(prefill_aware_mig)
+        self.selective_prefill_rescue = bool(selective_prefill_rescue)
+        self.prefill_traj_aware = bool(prefill_traj_aware)
+        self.safe_urg_mix_order = bool(safe_urg_mix_order)
         if id_override is not None:
             self.id = str(id_override)
         elif self.explicit_tier:
-            if self.prefill_dwell_place or self.dwell_aware_tier or self.prefill_aware_mig:
+            if self.selective_prefill_rescue or self.prefill_traj_aware or self.safe_urg_mix_order:
+                self.id = "discrete_rh_tier_v10"
+            elif self.prefill_dwell_place or self.dwell_aware_tier or self.prefill_aware_mig:
                 self.id = "discrete_rh_tier_v9"
             elif self.recompute_aware:
                 self.id = "discrete_rh_tier_v8"
@@ -405,9 +413,61 @@ class DiscreteThermalMigrator(TorchRebalance):
             return max(self.tier_slack_margin_s, ratio * rem_slack)
         return min(self.tier_slack_margin_s, 0.1 * rem_slack)
 
+    def _prefill_durations(self, w, node: int, jobs: list, start: float) -> dict[object, float]:
+        t_pref = float(w.gpu.get("t_prefill_tok_s", 0.0))
+        if t_pref <= 0.0 or not jobs:
+            return {}
+        pref_items = [
+            (float(getattr(r, "prefill_rem", 0.0)), r)
+            for r in jobs
+            if getattr(r, "state", "") == "prefill" or getattr(r, "prefill_rem", 0.0) > 1e-9
+        ]
+        if not pref_items:
+            return {}
+        pref_items.sort(key=lambda it: it[0])
+        pf = max(1e-6, float(w.prefill_f_of(node, start)))
+        durs: dict[object, float] = {}
+        prev_p = 0.0
+        t_acc = 0.0
+        n_total = len(pref_items)
+        for idx, (p_rem, r) in enumerate(pref_items):
+            dp = max(0.0, p_rem - prev_p)
+            n_conc = n_total - idx
+            if dp > 0.0:
+                t_acc += dp * t_pref * n_conc / pf
+            durs[r] = t_acc
+            prev_p = p_rem
+        return durs
+
+    def _eval_node_with_prefill(
+        self, w, node: int, jobs: list, start: float, edge_users: dict[int, int]
+    ):
+        if not self.prefill_traj_aware or not jobs:
+            return self._eval_node(w, node, jobs, start, edge_users)
+        durs = self._prefill_durations(w, node, jobs, start)
+        if not durs:
+            return self._eval_node(w, node, jobs, start, edge_users)
+        xs, ts = self._batch_trajectory(w, node, jobs, start)
+        scores, fins = {}, {}
+        n_q = len(QUANTILES)
+        for r in jobs:
+            tether_s, _ = self._tether_extra_s(w, node, r, start, edge_users)
+            p_s = durs.get(r, 0.0)
+            val_sum = 0.0
+            fin_sum = 0.0
+            for q in QUANTILES:
+                rem_q = self._q_rem(w, r, q)
+                t_dec = _interp_linear(rem_q, xs, ts) + tether_s + p_s
+                t_deliv = w.tr.next_conn(r.origin, node, t_dec)
+                val_sum += self._soft_val(r, t_deliv)
+                fin_sum += min(t_deliv, r.deadline + 500.0)
+            scores[r] = val_sum / n_q
+            fins[r] = fin_sum / n_q
+        return scores, fins
+
     def _eval_node_for_mig(self, w, node: int, jobs: list, start: float, edge_users: dict[int, int]):
         if not self.suppress_low_tier_self_mig:
-            return self._eval_node(w, node, jobs, start, edge_users)
+            return self._eval_node_with_prefill(w, node, jobs, start, edge_users)
         pm = getattr(w, "power_model", None)
         if (
             pm is None
@@ -416,11 +476,11 @@ class DiscreteThermalMigrator(TorchRebalance):
             or w.tr.is_dark(node, start)
             or w.thermal_f[node] < 1.0
         ):
-            return self._eval_node(w, node, jobs, start, edge_users)
+            return self._eval_node_with_prefill(w, node, jobs, start, edge_users)
         saved = pm._explicit_tier_idx[node]
         pm.set_explicit_tier(node, None)
         try:
-            return self._eval_node(w, node, jobs, start, edge_users)
+            return self._eval_node_with_prefill(w, node, jobs, start, edge_users)
         finally:
             pm.set_explicit_tier(node, saved)
 
@@ -479,15 +539,29 @@ class DiscreteThermalMigrator(TorchRebalance):
             p_src_after = self._node_power_w(w, src, max(0, n_s - 1), now)
             empties_src_to_0w = n_s == 1
 
+            pm = getattr(w, "power_model", None)
+            low_tier = min(spec.work_tiers, key=lambda t: (t.power_w, t.index)) if (spec and spec.work_tiers) else None
+            n_pref_src = sum(
+                1 for x in batch if getattr(x, "state", "") == "prefill" or getattr(x, "prefill_rem", 0.0) > 1e-9
+            )
+            src_in_low = (
+                pm is not None
+                and low_tier is not None
+                and hasattr(pm, "_tier_idx")
+                and pm._tier_idx[src] == low_tier.index
+            )
             for r in long_batch:
                 if r.migrating or r.n_mig >= self.max_mig_per_req or now >= r.deadline:
                     continue
-                if (
-                    self.prefill_aware_mig
-                    and not (src_dark or src_thr)
-                    and (getattr(r, "state", "") == "prefill" or getattr(r, "prefill_rem", 0.0) > 1e-9)
-                ):
-                    continue
+                is_pref = getattr(r, "state", "") == "prefill" or getattr(r, "prefill_rem", 0.0) > 1e-9
+                if is_pref and not (src_dark or src_thr):
+                    if self.selective_prefill_rescue:
+                        pin_tok = max(1.0, float(getattr(r, "pin", 1)))
+                        low_stuck = src_in_low and float(getattr(r, "prefill_rem", 0.0)) > 0.25 * pin_tok
+                        if getattr(r, 'n_recompute', 0) >= 1 or not (n_pref_src >= 2 or low_stuck or self._is_urgent(r, w, now)):
+                            continue
+                    elif self.prefill_aware_mig:
+                        continue
                 stay_s = before_score[src][r]
                 stay_f = before_fin[src][r]
                 if urgent_relay and stay_s > 0.78:
@@ -524,13 +598,30 @@ class DiscreteThermalMigrator(TorchRebalance):
                         bw = min(w.net.cap[e] / (edge_users.get(e, 0) + 1) for e in p[1])
                         lat_sw = w.hop_lat * len(p[1]) + w.switch_s
                         kv_d_p = kv_bytes / bw + lat_sw
+                        if self.selective_prefill_rescue and can_recompute:
+                            n_pref_dst = 1 + sum(
+                                1
+                                for x in w.nodes[dst]
+                                if getattr(x, "state", "") == "prefill" or getattr(x, "prefill_rem", 0.0) > 1e-9
+                            )
+                            dst_pf = max(1e-6, float(w.prefill_f_of(dst, now)))
+                        else:
+                            n_pref_dst = 1
+                            dst_pf = 1.0
                         if r.state == "prefill":
                             net_d_p = recompute_bytes / bw + lat_sw
-                            eff_d_p = net_d_p + max(0.0, (float(r.pin) - float(r.prefill_rem)) * t_pref)
+                            lost_tok = max(0.0, float(r.pin) - float(r.prefill_rem))
+                            eff_d_p = net_d_p + (
+                                lost_tok * t_pref * n_pref_dst / dst_pf
+                                if self.selective_prefill_rescue
+                                else lost_tok * t_pref
+                            )
                             mig_nbytes, mig_mode = recompute_bytes, "recompute"
                         elif can_recompute:
                             rec_tx_s = recompute_bytes / bw + lat_sw
-                            rec_comp_s = (float(r.pin) + float(r.gen)) * t_pref
+                            rec_comp_s = (float(r.pin) + float(r.gen)) * t_pref * (
+                                n_pref_dst / dst_pf if self.selective_prefill_rescue else 1.0
+                            )
                             if (rec_tx_s + rec_comp_s < kv_d_p * 0.85) or (
                                 kv_d_p >= w.mig_timeout and rec_tx_s < w.mig_timeout
                             ):
@@ -992,7 +1083,10 @@ class DiscreteThermalMigrator(TorchRebalance):
 
             miss = 1 if fin > r.deadline else 0
             urg_mix = 1 if (any(not _is_explicit_urg(x) for x in w.nodes[j]) if is_urg else any(_is_explicit_urg(x) for x in w.nodes[j])) else 0
-            score = (miss, urg_mix, low_locked, dark, hot, 1 if n_pref > 1 else 0, in_low, fin, len(w.nodes[j]), j)
+            if self.safe_urg_mix_order:
+                score = (miss, dark, hot, low_locked, 1 if n_pref > 1 else 0, urg_mix, in_low, fin, len(w.nodes[j]), j)
+            else:
+                score = (miss, urg_mix, low_locked, dark, hot, 1 if n_pref > 1 else 0, in_low, fin, len(w.nodes[j]), j)
             if best_score is None or score < best_score:
                 best_score = score
                 best_node = j
