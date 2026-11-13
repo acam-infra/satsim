@@ -27,6 +27,22 @@
 - 架构与建模决策记录：`docs/adr/`
 - 如何维护术语与 ADR：`docs/agents/domain.md`
 
+## Agent skills
+
+本仓库内置 `.agents/skills/`（来自 `mattpocock/skills` 的项目级工程与效率技能）。各技能读取以下仓库配置契约：
+
+### Issue tracker
+
+任务与分阶段并发子票统一在 Multica 平台（`ccds-lab`）追踪，不在 GitHub Issues 双开。详见 `docs/agents/issue-tracker.md`。
+
+### Triage labels
+
+五类标准分流角色与 Multica 状态/标签的映射约定。详见 `docs/agents/triage-labels.md`。
+
+### Domain docs
+
+单上下文（Single-context）领域文档布局，以根目录 `GLOSSARY.md` 与 `docs/adr/` 为准。详见 `docs/agents/domain.md`。
+
 ## Lab
 
 Research go / no-go → `api.gjam.tech`, workspace `ccds-lab`, entry `LAB-1466`.

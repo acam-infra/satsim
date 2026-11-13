@@ -277,7 +277,33 @@ def _prior_remaining_s(w, r) -> float:
 def thermal_service_clock(w, j, batch, tokens, context):
     """Estimate the lit decode clock over a batch's service interval from its heat budget."""
     thermal = w.thermal
-    if thermal is None or w.thermal_f[j] < 1:
+    if thermal is None:
+        pm = getattr(w, "power_model", None)
+        if getattr(pm, "mode", "") == "discrete_tiers":
+            from satsim.cosim.power_tiers import select_tier_for_batch
+
+            if tokens <= 0 or batch <= 0:
+                return pm.operating_point(j, batch, is_dark=False).clock_f
+            cur_op = pm.operating_point(j, batch, is_dark=False)
+            high_tier = select_tier_for_batch(pm.spec, max(batch, 1), is_eclipse=False)
+            if cur_op.clock_f < high_tier.clock_f - 1e-9:
+                return cur_op.clock_f
+            eq_temp = pm.t_amb_c + pm.r_th * high_tier.power_w
+            if eq_temp <= pm.spec.t_max_c:
+                return high_tier.clock_f
+            temp = min(pm.temperature(j), pm.spec.t_max_c)
+            time_to_cap = pm.tau_s * math.log((eq_temp - temp) / (eq_temp - pm.spec.t_max_c))
+            full_speed_time = tokens * iter_time(max(batch, 1), context, high_tier.clock_f, w.gpu)
+            if full_speed_time <= time_to_cap:
+                return high_tier.clock_f
+            low_tiers = [
+                t for t in pm.spec.tiers[1:] if pm.t_amb_c + pm.r_th * t.power_w <= pm.spec.t_max_c + 1e-6
+            ]
+            sustain_f = max((t.clock_f for t in low_tiers), default=pm.spec.tiers[1].clock_f)
+            slowed = (full_speed_time - time_to_cap) * (high_tier.clock_f / max(1e-6, sustain_f))
+            return high_tier.clock_f * full_speed_time / (time_to_cap + slowed)
+        return w.thermal_f[j]
+    if w.thermal_f[j] < 1:
         return w.thermal_f[j]
     power = w.device_power(batch, 1.0)
     equilibrium = thermal.T_amb_C + thermal.R_th * power
@@ -352,12 +378,13 @@ class OrbitLoad(Greedy):
         batch = len(w.nodes[j]) + 1 + int(w.reserved[j] > 0)
         context = sum(x.kv for x in w.nodes[j]) + r.pin + tokens / 2 + w.reserved[j] / w.bpt / 2
         start = w.env.now + upload_s
-        if self.thermal_mode in ("rc_const", "rc_staged") and w.thermal is not None:
+        is_disc = getattr(getattr(w, "power_model", None), "mode", "") == "discrete_tiers"
+        if self.thermal_mode in ("rc_const", "rc_staged") and (w.thermal is not None or is_disc):
             return self._delivery_rc(w, r, tokens, j, upload_s, batch, context, start)
         if self.thermal_mode == "off":
             clock = 1.0
         elif self.thermal_mode == "hot_only":
-            clock = w.thermal_f[j] if w.thermal is not None else 1.0
+            clock = w.thermal_f[j] if (w.thermal is not None or is_disc) else 1.0
         else:
             clock = thermal_service_clock(w, j, batch, tokens, context)
         for a, b, dark in w.tr.power_segments(j, start):
@@ -643,13 +670,14 @@ class CoolAware:
     @staticmethod
     def _will_throttle(w, j: int) -> bool:
         """True when resident batch heat load will push node j into thermal throttling before decode ends."""
-        if getattr(w, "thermal", None) is None or not w.nodes[j]:
+        is_disc = getattr(getattr(w, "power_model", None), "mode", "") == "discrete_tiers"
+        if (getattr(w, "thermal", None) is None and not is_disc) or not w.nodes[j]:
             return False
         rem = max((r.remaining for r in w.nodes[j]), default=0.0)
         if rem <= 0.0:
             return False
         ctx = sum(r.kv for r in w.nodes[j])
-        return thermal_service_clock(w, j, len(w.nodes[j]), rem, ctx) < 1.0
+        return thermal_service_clock(w, j, len(w.nodes[j]), rem, ctx) < 1.0 - 1e-6
 
     def _decoded_on_src(self, w, src: int, now: float, dt: float) -> float:
         """Tokens decoded at the source while KV streams across ISLs."""
@@ -692,7 +720,8 @@ class CoolAware:
         extra = r if joining else None
         batch = max(len(w.nodes[node]) + (1 if joining else 0), 1)
         ctx = sum(x.kv for x in w.nodes[node]) + (r.kv if joining else 0.0)
-        if getattr(w, "thermal", None) is not None:
+        is_disc = getattr(getattr(w, "power_model", None), "mode", "") == "discrete_tiers"
+        if getattr(w, "thermal", None) is not None or is_disc:
             f_lit = thermal_service_clock(w, node, batch, left, ctx)
         else:
             f_lit = w.thermal_f[node] if getattr(w, "thermal_f", None) is not None else 1.0
@@ -824,6 +853,33 @@ class CoolAware:
                 budget -= 1
 
 
+class LowTierPack:
+    """Pack slack-safe requests onto already-awake low-tier nodes before waking 0W nodes."""
+
+    id = "low_tier_pack"
+
+    def __init__(self, fallback: dict | None = None, tier_slack_margin_s: float = 10.0):
+        self.fallback = make_policy(fallback) if fallback is not None else OrbitLoad(thermal_mode="rc_staged")
+        self.tier_slack_margin_s = float(tier_slack_margin_s)
+
+    def place(self, w, r):
+        from satsim.cosim.discrete_milp import DiscreteThermalMigrator
+
+        helper = getattr(self, "_helper", None)
+        if helper is None:
+            helper = DiscreteThermalMigrator(
+                explicit_tier=True,
+                on_arrival_tier=True,
+                low_tier_pack=True,
+                tier_slack_margin_s=self.tier_slack_margin_s,
+            )
+            self._helper = helper
+        packed = helper._low_tier_pack_place(w, r)
+        if packed is not None:
+            return packed
+        return self.fallback.place(w, r)
+
+
 class CompositePolicy:
     """Orthogonal composition of any Placer (place) and any Migrator (rebalance)."""
 
@@ -835,9 +891,110 @@ class CompositePolicy:
     def place(self, w, r):
         return self.placer.place(w, r)
 
+    def on_arrival(self, w, node: int, r) -> None:
+        if hasattr(self.placer, "on_arrival"):
+            self.placer.on_arrival(w, node, r)
+        if self.migrator is not None and hasattr(self.migrator, "on_arrival"):
+            self.migrator.on_arrival(w, node, r)
+
+    def on_departure(self, w, node: int, r) -> None:
+        if hasattr(self.placer, "on_departure"):
+            self.placer.on_departure(w, node, r)
+        if self.migrator is not None and hasattr(self.migrator, "on_departure"):
+            self.migrator.on_departure(w, node, r)
+
     def rebalance(self, w) -> None:
         if self.migrator is not None:
             self.migrator.rebalance(w)
+
+
+def _make_thermal_rebalance(**kw):
+    from satsim.cosim.thermal_rebalance import ThermalRebalance
+
+    return ThermalRebalance(**kw)
+
+
+def _make_torch_rebalance(**kw):
+    from satsim.cosim.thermal_rebalance import TorchRebalance
+
+    return TorchRebalance(**kw)
+
+
+def _make_discrete_rh_greedy(**kw):
+    from satsim.cosim.discrete_milp import DiscreteThermalMigrator, IncrementalGreedySolver
+
+    kw.setdefault("solver", IncrementalGreedySolver())
+    return DiscreteThermalMigrator(**kw)
+
+
+def _make_discrete_rh_tier(**kw):
+    from satsim.cosim.discrete_milp import DiscreteThermalMigrator, IncrementalGreedySolver
+
+    kw.setdefault("solver", IncrementalGreedySolver())
+    kw.setdefault("explicit_tier", True)
+    return DiscreteThermalMigrator(**kw)
+
+
+def _make_discrete_rh_tier_v2(**kw):
+    from satsim.cosim.discrete_milp import DiscreteThermalMigrator, IncrementalGreedySolver
+
+    kw.setdefault("solver", IncrementalGreedySolver())
+    kw.setdefault("explicit_tier", True)
+    kw.setdefault("on_arrival_tier", True)
+    kw.setdefault("low_tier_pack", True)
+    return DiscreteThermalMigrator(**kw)
+
+
+def _make_discrete_rh_tier_v3(**kw):
+    from satsim.cosim.discrete_milp import DiscreteThermalMigrator, IncrementalGreedySolver
+
+    kw.setdefault("solver", IncrementalGreedySolver())
+    kw.setdefault("explicit_tier", True)
+    kw.setdefault("on_arrival_tier", True)
+    kw.setdefault("low_tier_pack", True)
+    kw.setdefault("tier_slack_ratio", 0.25)
+    kw.setdefault("suppress_low_tier_self_mig", True)
+    kw.setdefault("urgent_tier_guard", True)
+    return DiscreteThermalMigrator(**kw)
+
+
+def _make_discrete_rh_tier_v4(**kw):
+    from satsim.cosim.discrete_milp import DiscreteThermalMigrator, IncrementalGreedySolver
+
+    kw.setdefault("solver", IncrementalGreedySolver())
+    kw.setdefault("explicit_tier", True)
+    kw.setdefault("on_arrival_tier", True)
+    kw.setdefault("low_tier_pack", False)
+    kw.setdefault("tier_slack_ratio", 0.45)
+    kw.setdefault("suppress_low_tier_self_mig", True)
+    kw.setdefault("urgent_tier_guard", True)
+    kw.setdefault("eclipse_lookahead_s", 30.0)
+    return DiscreteThermalMigrator(**kw)
+
+
+def _make_discrete_step_milp(**kw):
+    from satsim.cosim.discrete_milp import DiscreteThermalMigrator, StepMilpSolver
+
+    kw.setdefault("solver", StepMilpSolver())
+    return DiscreteThermalMigrator(**kw)
+
+
+def _make_llumnix_style_mig_only(**kw):
+    from satsim.cosim.topconf_baselines import LlumnixStyleMigOnly
+
+    return LlumnixStyleMigOnly(**kw)
+
+
+def _make_tapas_reactive_thermal(**kw):
+    from satsim.cosim.topconf_baselines import TapasReactiveThermal
+
+    return TapasReactiveThermal(**kw)
+
+
+def _make_mcs_slack_dvfs_no_mig(**kw):
+    from satsim.cosim.topconf_baselines import McsSlackDvfsNoMig
+
+    return McsSlackDvfsNoMig(**kw)
 
 
 PLACERS = {
@@ -855,6 +1012,10 @@ PLACERS = {
     "ephemeris": Ephemeris,
     "orbit_load": OrbitLoad,
     "orbit_thermal": OrbitLoad,
+    "low_tier_pack": LowTierPack,
+    "llumnix_style_mig_only": _make_llumnix_style_mig_only,
+    "tapas_reactive_thermal": _make_tapas_reactive_thermal,
+    "mcs_slack_dvfs_no_mig": _make_mcs_slack_dvfs_no_mig,
 }
 
 MIGRATORS = {
@@ -862,13 +1023,27 @@ MIGRATORS = {
     "reactive": Reactive,
     "contact_aware": ContactAware,
     "cool_aware": CoolAware,
+    "thermal_rebalance": _make_thermal_rebalance,
+    "torch_rebalance": _make_torch_rebalance,
+    "torch_lp": _make_torch_rebalance,
+    "discrete_rh_greedy": _make_discrete_rh_greedy,
+    "discrete_rh_tier": _make_discrete_rh_tier,
+    "discrete_rh_tier_v2": _make_discrete_rh_tier_v2,
+    "discrete_rh_tier_v3": _make_discrete_rh_tier_v3,
+    "discrete_rh_tier_v4": _make_discrete_rh_tier_v4,
+    "discrete_step_milp": _make_discrete_step_milp,
+    "llumnix_style_mig_only": _make_llumnix_style_mig_only,
+    "tapas_reactive_thermal": _make_tapas_reactive_thermal,
+    "mcs_slack_dvfs_no_mig": _make_mcs_slack_dvfs_no_mig,
 }
 
 POLICIES = {
     **PLACERS,
-    "reactive": Reactive,
-    "contact_aware": ContactAware,
-    "cool_aware": CoolAware,
+    **{k: v for k, v in MIGRATORS.items() if v is not None},
+    # Legacy standalone policy aliases preserved for backward compatibility
+    "round_robin": RoundRobin,
+    "random": lambda **_kw: RoundRobin(mode="random"),
+    "least_loaded": lambda **_kw: RoundRobin(mode="least_loaded"),
 }
 
 
@@ -887,21 +1062,6 @@ def make_policy(spec: dict):
         return CompositePolicy(placer, migrator)
     kind = spec["policy"]
     kw = {k: v for k, v in spec.items() if k != "policy"}
-    if kind == "thermal_rebalance":
-        from satsim.cosim.thermal_rebalance import ThermalRebalance
-
-        return ThermalRebalance(**kw)
-    if kind in ("torch_rebalance", "torch_lp"):
-        from satsim.cosim.thermal_rebalance import TorchRebalance
-
-        return TorchRebalance(**kw)
-    table = {"greedy": Greedy, "ephemeris": Ephemeris, "reactive": Reactive, "contact_aware": ContactAware,
-             "cool_aware": CoolAware,
-             "round_robin": RoundRobin,
-             "random": lambda **_kw: RoundRobin(mode="random"),
-             "least_loaded": lambda **_kw: RoundRobin(mode="least_loaded"),
-             "round_robin_all": ReachableRoundRobin, "least_reserved_kv": LeastReservedKV,
-             "nearest": Nearest, "orbit_load": OrbitLoad, "orbit_thermal": OrbitLoad}
-    if kind not in table:
-        raise ValueError(f"unknown cosim policy {kind!r}; one of {sorted(table)}")
-    return table[kind](**kw)
+    if kind not in POLICIES:
+        raise ValueError(f"unknown cosim policy {kind!r}; one of {sorted(POLICIES)}")
+    return POLICIES[kind](**kw)

@@ -10,10 +10,10 @@ from satsim.method.engine.timing import iter_time
 
 
 class ThermalRebalance:
-    def __init__(self, placement: dict, externality: bool = True, interval_s: float = 30.0,
+    def __init__(self, placement: dict | None = None, externality: bool = True, interval_s: float = 30.0,
                  deadline_aware: bool = True, thermal_aware: bool | str = True,
                  max_inflight: int | None = None, max_mig_per_req: int | None = None):
-        self.placement = make_policy(placement)
+        self.placement = make_policy(placement) if placement is not None else None
         self.externality = externality
         self.deadline_aware = deadline_aware
         self.thermal_aware = thermal_aware
@@ -24,7 +24,7 @@ class ThermalRebalance:
         self.max_mig_per_req = 1 if max_mig_per_req is None else int(max_mig_per_req)
 
     def place(self, w, r):
-        return self.placement.place(w, r)
+        return self.placement.place(w, r) if self.placement is not None else None
 
     @staticmethod
     def _remaining(w, r):
@@ -36,7 +36,8 @@ class ThermalRebalance:
         active = sorted(((self._remaining(w, r), r.i, r) for r in jobs))
         previous = 0.0
         result = {}
-        forecast = ThermalForecast(w, node) if self.rc_forecast and w.thermal is not None else None
+        has_pm = getattr(w, "power_model", None) is not None
+        forecast = ThermalForecast(w, node) if self.rc_forecast and (has_pm or w.thermal is not None) else None
         for i, (target, _, r) in enumerate(active):
             step = target - previous
             rest = active[i:]
@@ -125,8 +126,12 @@ class ThermalForecast:
     def __init__(self, world, node):
         self.w = world
         self.node = node
+        self.power_model = getattr(world, "power_model", None)
         self.model = world.thermal
-        self.temp = self.model.temperature(node)
+        if self.power_model is not None:
+            self.temp = self.power_model.temperature(node)
+        else:
+            self.temp = self.model.temperature(node)
         self.throttled = world.thermal_f[node] < 1
 
     def advance(self, start, dt, batch):
@@ -139,6 +144,12 @@ class ThermalForecast:
         w, model = self.w, self.model
         if dt <= 0:
             return start
+        if model is None:
+            if self.power_model is not None and hasattr(self.power_model, "advance_temp"):
+                self.temp = self.power_model.advance_temp(
+                    self.node, start, dt, batch, trace=w.tr, initial_temp_c=self.temp
+                )
+            return start + dt
         target = start + dt
         for now, end, dark in w.tr.power_segments(self.node, start):
             orbit_clock = w.f_dark if dark else 1.0
@@ -164,6 +175,20 @@ class ThermalForecast:
         return target
 
     def finish(self, start, batch, context, tokens):
+        if self.model is None and self.power_model is not None:
+            kw = {"trace": self.w.tr, "gpu": self.w.gpu}
+            if hasattr(self.power_model, "advance_temp"):
+                kw["initial_temp_c"] = self.temp
+            finish_t, end_temp = self.power_model.project_finish(
+                self.node,
+                start,
+                batch,
+                context,
+                tokens,
+                **kw,
+            )
+            self.temp = end_temp
+            return finish_t
         w, model = self.w, self.model
         for now, end, dark in w.tr.power_segments(self.node, start):
             orbit_clock = w.f_dark if dark else 1.0
@@ -209,15 +234,29 @@ def _interp_linear(x: float, xs: list[float], ys: list[float]) -> float:
     return ys[k] + (x - xs[k]) / dx * (ys[k + 1] - ys[k])
 
 
+_KSP_CACHE: dict[tuple[int, int, int, int, int, int], list[tuple[list[int], list[int]]]] = {}
+
+
 def k_shortest_paths(
     trace, s: int, d: int, t: float, k: int = 3, max_hops: int = 6
 ) -> list[tuple[list[int], list[int]]]:
-    """Up to k simple paths at time t avoiding intermediate RS nodes."""
+    """Up to k simple paths at time t avoiding intermediate RS nodes (cached per trace epoch)."""
+    ep = trace.epoch_index(t) if hasattr(trace, "epoch_index") else None
+    cache_key = (id(trace), ep, s, d, k, max_hops) if ep is not None else None
+    if cache_key is not None:
+        cached = _KSP_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
     p0 = trace.path(s, d, t)
     if p0 is None or not p0[1]:
-        return [] if p0 is None else [p0]
+        out = [] if p0 is None else [p0]
+        if cache_key is not None:
+            _KSP_CACHE[cache_key] = out
+        return out
     paths = [p0]
     if k <= 1:
+        if cache_key is not None:
+            _KSP_CACHE[cache_key] = paths
         return paths
     adj = trace.adjacency(t)
     for ban_e in p0[1]:
@@ -247,6 +286,10 @@ def k_shortest_paths(
             cand = (nodes[::-1], eids[::-1])
             if len(cand[1]) <= max_hops and cand not in paths:
                 paths.append(cand)
+    if cache_key is not None:
+        if len(_KSP_CACHE) > 65536:
+            _KSP_CACHE.clear()
+        _KSP_CACHE[cache_key] = paths
     return paths
 
 
@@ -277,7 +320,7 @@ class TorchRebalance:
 
     def __init__(
         self,
-        placement: dict,
+        placement: dict | None = None,
         interval_s: float = 5.0,
         max_inflight: int = 24,
         max_mig_per_req: int = 4,
@@ -290,7 +333,7 @@ class TorchRebalance:
         from satsim.cosim.policies import candidates as place_candidates
 
         self._place_candidates = place_candidates
-        self.placement = make_policy(placement)
+        self.placement = make_policy(placement) if placement is not None else None
         self.interval_s = interval_s
         self.next_plan = interval_s
         self.max_inflight = max_inflight
@@ -344,7 +387,7 @@ class TorchRebalance:
                         if viable_waiting >= max(4, avail_slots):
                             return None
 
-        return self.placement.place(w, r)
+        return self.placement.place(w, r) if self.placement is not None else None
 
     @staticmethod
     def _mean_rem(w, r) -> float:
@@ -373,7 +416,8 @@ class TorchRebalance:
             return [0.0], [start]
         active = sorted(((self._mean_rem(w, r), r.i, r) for r in jobs))
         previous = 0.0
-        forecast = ThermalForecast(w, node) if w.thermal is not None else None
+        has_pm = getattr(w, "power_model", None) is not None
+        forecast = ThermalForecast(w, node) if (has_pm or w.thermal is not None) else None
         t_cur = start
         xs = [0.0]
         ts = [start]
@@ -495,7 +539,7 @@ class TorchRebalance:
             key=lambda j: (
                 w.thermal_f[j] < 1.0,
                 len(w.nodes[j]) + round(w.reserved[j] / long_need),
-                w.thermal.temperature(j) if w.thermal else 0.0,
+                w.temperature(j) if hasattr(w, "temperature") else (w.thermal.temperature(j) if w.thermal else 0.0),
                 j,
             )
         )
