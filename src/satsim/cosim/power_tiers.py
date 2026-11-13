@@ -1,13 +1,23 @@
 """Discrete satellite power-tier contract and linear RC thermal projection helpers.
 
-Frozen in Stage 0 (LAB-1867 / ADR-0007) as the narrow seam shared by:
-- ``world.py`` & ``dynamic.py`` (DP-1A: physical discrete power & temperature evolution),
-- ``discrete_milp.py`` (DP-1B: joint request-migration + power-tier HiGHS MILP),
-- ``record.py`` (DP-1C: zero-power fraction, tier residency, energy & thermal margin metrics),
-- ``configs/*`` & ``scripts/verify_discrete_milp.py`` (DP-1D: YAML scenarios & solver benchmark).
+Frozen in Stage 0 (LAB-1867 / LAB-1881 / ADR-0007) as the narrow seam shared by:
+- ``world.py`` & ``dynamic.py`` & ``record.py`` (DP-1: physical discrete power, RC evolution & metrics),
+- ``discrete_milp.py`` & ``policies.py`` & ``run.py`` (DP-2: 120s snapshot Time-ILP + online multi-hop 0W-drain RH-Greedy),
+- ``configs/*`` & ``scripts/verify_discrete_milp.py`` (DP-3: calibrated hotspot configs & cnb-compute ablation).
 
-When ``cfg["power"].get("mode", "continuous") != "discrete_tiers"``, callers MUST preserve
-legacy continuous ``device_power`` and hysteresis behaviour with zero regression (``diffs=0``).
+Key safety & fairness invariants (LAB-1881 review fixes):
+1. **Zero-request 0 W power vs. strictly positive step-time frequency**:
+   ``select_tier_for_batch(spec, 0, ...)`` returns ``idle_tier`` (``power_w == 0.0``) for physical
+   thermal integration, whereas ``effective_clock_f(spec, batch, ...)`` evaluates at
+   ``max(batch, 1)`` so ``CoWorld.f_of`` / ``CoWorld.iter_of`` NEVER divide by zero on empty nodes.
+2. **Symmetric baseline fairness**:
+   By default (``prefer_high_clock=True``), sunlit nodes with safe thermal margin select the fastest
+   feasible working tier rather than locking light-load baselines (``batch = 1..4``) into a slow tier;
+   entering eclipse (``P_k > P_dark``) or approaching ``T_max_C`` automatically steps down to a lower
+   power tier, while planners may also proactively set ``explicit_tier_idx`` (e.g. pre-cooling).
+3. **Zero legacy regression**:
+   When ``cfg["power"].get("mode", "continuous") != "discrete_tiers"``, callers MUST preserve
+   legacy continuous ``device_power`` and ``84°C/76°C`` hysteresis with ``diffs=0``.
 """
 from __future__ import annotations
 
@@ -33,6 +43,11 @@ class PowerTier:
     power_w: float
     max_batch: int
     clock_f: float
+    prefill_clock_f: float | None = None
+
+    @property
+    def effective_prefill_f(self) -> float:
+        return self.clock_f if self.prefill_clock_f is None else self.prefill_clock_f
 
 
 @dataclass(frozen=True)
@@ -43,6 +58,7 @@ class DiscretePowerSpec:
     p_dark_w: float
     t_max_c: float
     thermal_horizon_s: float
+    prefer_high_clock: bool = True
 
     @property
     def idle_tier(self) -> PowerTier:
@@ -74,11 +90,12 @@ def parse_discrete_power_spec(cfg: dict) -> DiscretePowerSpec | None:
           P_max: 300
           gamma: 2.4
           f_min: 0.35
-          P_dark: 80
+          P_dark: 150
+          prefer_high_clock: true   # optional (default true: sunlit cool nodes use fastest safe tier)
           tiers:
-            - {name: idle_0w, power_w: 0.0, max_batch: 0, clock_f: 0.0}   # optional; auto-inserted if omitted
-            - {name: low,     power_w: 150.0, max_batch: 4, clock_f: 0.65}
-            - {name: high,    power_w: 300.0, max_batch: 12, clock_f: 1.0}
+            - {name: idle_0w, power_w: 0.0, max_batch: 0, clock_f: 0.0}   # optional; auto-inserted
+            - {name: low,     power_w: 150.0, max_batch: 4, clock_f: 0.65, prefill_clock_f: 0.35}
+            - {name: high,    power_w: 300.0, max_batch: 12, clock_f: 1.0, prefill_clock_f: 1.0}
     """
     if not is_discrete_power(cfg):
         return None
@@ -93,15 +110,17 @@ def parse_discrete_power_spec(cfg: dict) -> DiscretePowerSpec | None:
         pw = float(item["power_w"])
         mb = int(item["max_batch"])
         cf = float(item["clock_f"])
+        pcf_raw = item.get("prefill_clock_f")
+        pcf = float(pcf_raw) if pcf_raw is not None else None
         nm = str(item.get("name", f"tier_{len(parsed)}"))
         if mb == 0:
-            if pw != 0.0 or cf != 0.0:
+            if pw != 0.0 or cf != 0.0 or (pcf is not None and pcf != 0.0):
                 raise ValueError("zero-request tier (max_batch=0) must have power_w=0.0 and clock_f=0.0")
             has_zero = True
         else:
-            if mb < 0 or pw <= 0.0 or cf <= 0.0:
+            if mb < 0 or pw <= 0.0 or cf <= 0.0 or (pcf is not None and pcf <= 0.0):
                 raise ValueError(f"working tier {nm!r} must have positive power_w, max_batch, and clock_f")
-        parsed.append(PowerTier(index=0, name=nm, power_w=pw, max_batch=mb, clock_f=cf))
+        parsed.append(PowerTier(index=0, name=nm, power_w=pw, max_batch=mb, clock_f=cf, prefill_clock_f=pcf))
 
     if not has_zero:
         parsed.insert(0, PowerTier(index=0, name="idle_0w", power_w=0.0, max_batch=0, clock_f=0.0))
@@ -117,7 +136,14 @@ def parse_discrete_power_spec(cfg: dict) -> DiscretePowerSpec | None:
             raise ValueError(f"duplicate max_batch={t.max_batch} in power.tiers")
         seen_batches.add(t.max_batch)
         reindexed.append(
-            PowerTier(index=idx, name=t.name, power_w=t.power_w, max_batch=t.max_batch, clock_f=t.clock_f)
+            PowerTier(
+                index=idx,
+                name=t.name,
+                power_w=t.power_w,
+                max_batch=t.max_batch,
+                clock_f=t.clock_f,
+                prefill_clock_f=t.prefill_clock_f,
+            )
         )
     if len(reindexed) < 2:
         raise ValueError("discrete_tiers requires at least one working tier (k >= 1)")
@@ -128,12 +154,14 @@ def parse_discrete_power_spec(cfg: dict) -> DiscretePowerSpec | None:
     if horizon_s <= 0.0:
         raise ValueError("thermal.thermal_horizon_s must be positive")
     p_dark_w = float(power["P_dark"])
+    prefer_high_clock = bool(power.get("prefer_high_clock", True))
 
     return DiscretePowerSpec(
         tiers=tuple(reindexed),
         p_dark_w=p_dark_w,
         t_max_c=t_max_c,
         thermal_horizon_s=horizon_s,
+        prefer_high_clock=prefer_high_clock,
     )
 
 
@@ -193,15 +221,23 @@ def select_tier_for_batch(
     is_eclipse: bool = False,
     current_temp_c: float | None = None,
     rc_step_coeffs: tuple[float, float, float] | None = None,
+    explicit_tier_idx: int | None = None,
+    prefer_high_clock: bool | None = None,
 ) -> PowerTier:
-    """Deterministic runtime fallback mapping resident ``batch`` to an active ``PowerTier``.
+    """Deterministic runtime governor mapping resident ``batch`` to an active ``PowerTier``.
 
     - ``batch <= 0`` ALWAYS selects ``spec.idle_tier`` (``0.0 W, clock_f = 0.0``).
-    - ``batch >= 1`` filters working tiers allowed by ``is_eclipse`` (and, when ``current_temp_c``
-      and ``rc_step_coeffs`` are supplied, tiers keeping ``T_next <= spec.t_max_c``), picking the
-      lowest-power tier whose ``max_batch >= batch``. If ``batch`` exceeds all feasible tiers'
-      ``max_batch``, falls back to the highest-capacity feasible working tier (or the lowest-power
-      working tier when even ``P_dark``/``T_max`` has no slack) so ongoing decode never divides by 0.
+    - ``batch >= 1`` filters working tiers allowed by ``is_eclipse`` (D3) and, when ``current_temp_c``
+      and ``rc_step_coeffs`` are supplied, tiers keeping ``T_next <= spec.t_max_c`` (D4).
+    - If ``explicit_tier_idx`` names a feasible working tier whose ``max_batch >= batch``, that
+      planner-chosen tier (e.g. proactive pre-cooling at ``low`` tier) is honored directly.
+    - Otherwise, among feasible tiers with ``max_batch >= batch``:
+      - when ``prefer_high_clock`` (defaults to ``spec.prefer_high_clock``, ``True``), picks the
+        highest-clock tier (tie-broken by lower power) so sunlit cool nodes are not artificially
+        throttled at light load;
+      - when ``prefer_high_clock=False``, picks the minimum-power fitting tier.
+    - If ``batch`` exceeds all feasible tiers' ``max_batch``, clamps to the highest-capacity
+      feasible working tier so ongoing decode never divides by 0.
     """
     if batch <= 0:
         return spec.idle_tier
@@ -209,7 +245,6 @@ def select_tier_for_batch(
     allowed_set = set(allowed_tier_indices(spec, is_eclipse))
     work = [t for t in spec.work_tiers if t.index in allowed_set]
     if not work:
-        # If eclipse P_dark is below every configured working tier, fall back to the lowest-power work tier.
         work = [min(spec.work_tiers, key=lambda t: t.power_w)]
 
     if current_temp_c is not None and rc_step_coeffs is not None:
@@ -222,7 +257,45 @@ def select_tier_for_batch(
         else:
             work = [min(work, key=lambda t: t.power_w)]
 
+    if explicit_tier_idx is not None and explicit_tier_idx >= 1:
+        for t in work:
+            if t.index == explicit_tier_idx and t.max_batch >= batch:
+                return t
+
     fitting = [t for t in work if t.max_batch >= batch]
     if fitting:
+        use_high = spec.prefer_high_clock if prefer_high_clock is None else prefer_high_clock
+        if use_high:
+            return max(fitting, key=lambda t: (t.clock_f, -t.power_w, -t.max_batch))
         return min(fitting, key=lambda t: (t.power_w, t.max_batch))
     return max(work, key=lambda t: t.max_batch)
+
+
+def effective_clock_f(
+    spec: DiscretePowerSpec,
+    batch: int,
+    *,
+    is_eclipse: bool = False,
+    current_temp_c: float | None = None,
+    rc_step_coeffs: tuple[float, float, float] | None = None,
+    explicit_tier_idx: int | None = None,
+    prefer_high_clock: bool | None = None,
+) -> float:
+    """Return strictly positive decode ``clock_f > 0`` for resident or hypothetical ``batch``.
+
+    Decouples empty-node ``0.0 W`` thermal dissipation from candidate step-time estimation
+    (``CoWorld.f_of`` / ``CoWorld.iter_of``): when ``batch <= 0`` (an idle node probed by placement
+    or rebalance, or a request newly admitted before the next ``_thermal_tick``), evaluates at
+    ``eval_batch = 1`` so ``timing.iter_time`` never raises ``ZeroDivisionError``.
+    """
+    eval_batch = max(int(batch), 1)
+    tier = select_tier_for_batch(
+        spec,
+        eval_batch,
+        is_eclipse=is_eclipse,
+        current_temp_c=current_temp_c,
+        rc_step_coeffs=rc_step_coeffs,
+        explicit_tier_idx=explicit_tier_idx,
+        prefer_high_clock=prefer_high_clock,
+    )
+    return tier.clock_f
