@@ -19,6 +19,7 @@ from satsim.cosim.power_tiers import (
     select_tier_for_batch,
 )
 from satsim.cosim.thermal_rebalance import ThermalForecast, TorchRebalance, k_shortest_paths
+from satsim.method.engine.timing import iter_time
 
 
 def _infer_capacities(w, candidates: list[CandidateMove]) -> tuple[dict[int, int], dict[int, int], dict[int, float]]:
@@ -219,7 +220,18 @@ class DiscreteThermalMigrator(TorchRebalance):
         empty_bonus: float = 0.12,
         wake_penalty: float = 0.14,
         relay_min_free_ratio: float = 0.40,
+        explicit_tier: bool = False,
+        on_arrival_tier: bool = False,
+        low_tier_pack: bool = False,
+        tier_slack_margin_s: float = 10.0,
+        tier_slack_ratio: float = 0.0,
+        suppress_low_tier_self_mig: bool = False,
+        urgent_tier_guard: bool = False,
+        eclipse_lookahead_s: float = 0.0,
+        id_override: str | None = None,
     ):
+        if placement is None and (explicit_tier or low_tier_pack):
+            placement = {"policy": "orbit_load", "thermal_mode": "rc_staged"}
         super().__init__(
             placement=placement,
             interval_s=interval_s,
@@ -232,7 +244,25 @@ class DiscreteThermalMigrator(TorchRebalance):
             pre_admission_relay=pre_admission_relay,
         )
         self.solver: AssignmentSolver = solver if solver is not None else IncrementalGreedySolver()
-        self.id = "discrete_rh_greedy" if self.solver.id == "incremental_greedy" else f"discrete_{self.solver.id}"
+        self.explicit_tier = bool(explicit_tier)
+        self.on_arrival_tier = bool(on_arrival_tier)
+        self.low_tier_pack = bool(low_tier_pack)
+        self.tier_slack_margin_s = float(tier_slack_margin_s)
+        self.tier_slack_ratio = float(tier_slack_ratio)
+        self.suppress_low_tier_self_mig = bool(suppress_low_tier_self_mig)
+        self.urgent_tier_guard = bool(urgent_tier_guard)
+        self.eclipse_lookahead_s = float(eclipse_lookahead_s)
+        if id_override is not None:
+            self.id = str(id_override)
+        elif self.explicit_tier:
+            if self.eclipse_lookahead_s > 0.0:
+                self.id = "discrete_rh_tier_v4"
+            elif self.suppress_low_tier_self_mig or self.tier_slack_ratio > 0.0 or self.urgent_tier_guard:
+                self.id = "discrete_rh_tier_v3"
+            else:
+                self.id = "discrete_rh_tier_v2" if (self.on_arrival_tier or self.low_tier_pack) else "discrete_rh_tier"
+        else:
+            self.id = "discrete_rh_greedy" if self.solver.id == "incremental_greedy" else f"discrete_{self.solver.id}"
         self.energy_weight = float(energy_weight)
         self.empty_bonus = float(empty_bonus)
         self.wake_penalty = float(wake_penalty)
@@ -320,6 +350,36 @@ class DiscreteThermalMigrator(TorchRebalance):
         fc.advance(start_t, horizon_s, len(jobs))
         return fc.temp <= t_max + 1e-6
 
+    @staticmethod
+    def _is_urgent(r) -> bool:
+        return bool(getattr(r, "urgent", False) or getattr(r, "criticality", None) == "urgent")
+
+    def _tier_margin(self, deadline: float, now: float, ratio_override: float | None = None) -> float:
+        rem_slack = max(0.0, deadline - now)
+        ratio = self.tier_slack_ratio if ratio_override is None else ratio_override
+        if ratio > 0.0:
+            return max(self.tier_slack_margin_s, ratio * rem_slack)
+        return min(self.tier_slack_margin_s, 0.1 * rem_slack)
+
+    def _eval_node_for_mig(self, w, node: int, jobs: list, start: float, edge_users: dict[int, int]):
+        if not self.suppress_low_tier_self_mig:
+            return self._eval_node(w, node, jobs, start, edge_users)
+        pm = getattr(w, "power_model", None)
+        if (
+            pm is None
+            or not hasattr(pm, "_explicit_tier_idx")
+            or pm._explicit_tier_idx[node] is None
+            or w.tr.is_dark(node, start)
+            or w.thermal_f[node] < 1.0
+        ):
+            return self._eval_node(w, node, jobs, start, edge_users)
+        saved = pm._explicit_tier_idx[node]
+        pm.set_explicit_tier(node, None)
+        try:
+            return self._eval_node(w, node, jobs, start, edge_users)
+        finally:
+            pm.set_explicit_tier(node, saved)
+
     def _collect_candidates(self, w, urgent_relay: bool = False) -> list[CandidateMove]:
         now = w.env.now
         edge_users: dict[int, int] = {}
@@ -329,7 +389,7 @@ class DiscreteThermalMigrator(TorchRebalance):
 
         before_score, before_fin = {}, {}
         for j in w.tr.compute:
-            before_score[j], before_fin[j] = self._eval_node(w, j, w.nodes[j], now, edge_users)
+            before_score[j], before_fin[j] = self._eval_node_for_mig(w, j, w.nodes[j], now, edge_users)
 
         long_need = (w.cfg["workload"]["long_pin"] + w.cfg["workload"]["long_out"][1]) * w.bpt
         free_slots = {
@@ -384,7 +444,7 @@ class DiscreteThermalMigrator(TorchRebalance):
                     continue
 
                 rest_src = [x for x in batch if x is not r]
-                without_score, without_fin = self._eval_node(w, src, rest_src, now, edge_users)
+                without_score, without_fin = self._eval_node_for_mig(w, src, rest_src, now, edge_users)
                 relief_s = sum(without_score[x] - before_score[src][x] for x in rest_src)
                 relief_t = sum(before_fin[src][x] - without_fin[x] for x in rest_src)
 
@@ -434,7 +494,7 @@ class DiscreteThermalMigrator(TorchRebalance):
                     p_dst_after = self._node_power_w(w, dst, n_d + 1, now + delay)
                     delta_power_w = (p_src_after - p_src_before) + (p_dst_after - p_dst_before)
 
-                    after_score, after_fin = self._eval_node(w, dst, [*w.nodes[dst], r], now + delay, edge_users)
+                    after_score, after_fin = self._eval_node_for_mig(w, dst, [*w.nodes[dst], r], now + delay, edge_users)
                     move_s = after_score.pop(r)
                     move_f = after_fin.pop(r)
                     burden_s = sum(after_score[x] - before_score[dst][x] for x in w.nodes[dst])
@@ -455,6 +515,8 @@ class DiscreteThermalMigrator(TorchRebalance):
                         power_bonus += self.empty_bonus
                     elif wakes_dst_from_0w and not empties_src_to_0w:
                         power_bonus -= self.wake_penalty
+                        if spec is not None and spec.wakeup_energy_j > 0.0:
+                            power_bonus -= (spec.wakeup_energy_j / max(1.0, ref_power_w * 10.0)) * self.energy_weight
 
                     gain = net_slo_gain - link_prob_cost + (net_time_saved / max(1.0, r.deadline - r.t)) * 0.15 + power_bonus
 
@@ -471,8 +533,8 @@ class DiscreteThermalMigrator(TorchRebalance):
                                 new_jobs = [*prev_jobs, _r]
                                 if not self._check_thermal_safe(w, _dst, new_jobs, now + _delay):
                                     return False, -1.0
-                                prev_sc, prev_fn = self._eval_node(w, _dst, prev_jobs, now + _delay, edge_users)
-                                aft_sc, aft_fn = self._eval_node(w, _dst, new_jobs, now + _delay, edge_users)
+                                prev_sc, prev_fn = self._eval_node_for_mig(w, _dst, prev_jobs, now + _delay, edge_users)
+                                aft_sc, aft_fn = self._eval_node_for_mig(w, _dst, new_jobs, now + _delay, edge_users)
                                 m_s = aft_sc.pop(_r)
                                 m_f = aft_fn.pop(_r)
                                 b_s = sum(aft_sc[x] - prev_sc[x] for x in prev_jobs)
@@ -515,9 +577,142 @@ class DiscreteThermalMigrator(TorchRebalance):
 
         return candidates
 
+    def _est_rem(self, w, r) -> float:
+        wl = getattr(w, "cfg", {}).get("workload") or {}
+        key = "long_out" if r.long else "short_out"
+        if key in wl:
+            return self._mean_rem(w, r)
+        return max(1.0, float(getattr(r, "remaining", 1.0)))
+
+    def _select_explicit_tier_for_node(self, w, node: int) -> int | None:
+        pm = getattr(w, "power_model", None)
+        spec = self._spec(w)
+        if pm is None or spec is None or not hasattr(pm, "set_explicit_tier"):
+            return None
+        jobs = w.nodes[node]
+        if not jobs:
+            return None
+        if self.urgent_tier_guard and any(self._is_urgent(x) for x in jobs):
+            return None
+        now = float(w.env.now)
+        batch = len(jobs)
+        is_dark = bool(w.tr.is_dark(node, now))
+        approaching_dark = (
+            self.eclipse_lookahead_s > 0.0
+            and not is_dark
+            and bool(w.tr.is_dark(node, now + self.eclipse_lookahead_s))
+        )
+        cur_t = float(pm.temperature(node))
+        alpha, offset, gain = pm._rc_probe_coeffs
+        ctx = sum(x.kv + self._est_rem(w, x) / 2.0 for x in jobs)
+        eff_ratio = self.tier_slack_ratio
+        if approaching_dark and spec.p_dark_w < max(t.power_w for t in spec.work_tiers) - 1e-9:
+            eff_ratio = min(eff_ratio, 0.20) if eff_ratio > 0.0 else 0.20
+        elif self.eclipse_lookahead_s > 0.0 and cur_t >= spec.t_max_c - 8.0:
+            eff_ratio = min(eff_ratio, 0.20) if eff_ratio > 0.0 else 0.20
+        for tk in sorted(spec.work_tiers, key=lambda t: (t.power_w, t.index)):
+            if tk.max_batch < batch:
+                continue
+            if is_dark and tk.power_w > spec.p_dark_w + 1e-9:
+                continue
+            if alpha * cur_t + offset + gain * tk.power_w > spec.t_max_c + 1e-9:
+                continue
+            it = iter_time(batch, ctx, tk.clock_f, w.gpu)
+            all_safe = True
+            for x in jobs:
+                rem = self._est_rem(w, x)
+                margin = self._tier_margin(x.deadline, now, ratio_override=eff_ratio)
+                if now + rem * it > x.deadline - margin:
+                    all_safe = False
+                    break
+            if all_safe:
+                return tk.index
+        return None
+
+    def _update_explicit_tiers(self, w, nodes: list[int] | None = None) -> None:
+        if not self.explicit_tier:
+            return
+        pm = getattr(w, "power_model", None)
+        if pm is None or not hasattr(pm, "set_explicit_tier"):
+            return
+        for j in (w.tr.compute if nodes is None else nodes):
+            pm.set_explicit_tier(j, self._select_explicit_tier_for_node(w, j))
+
+    def on_arrival(self, w, node: int, r) -> None:
+        if self.explicit_tier and self.on_arrival_tier:
+            self._update_explicit_tiers(w, [node])
+
+    def _low_tier_pack_place(self, w, r) -> int | None:
+        from satsim.cosim.policies import upload_options
+
+        pm = getattr(w, "power_model", None)
+        spec = self._spec(w)
+        if pm is None or spec is None or len(spec.work_tiers) < 2 or not hasattr(pm, "_tier_idx"):
+            return None
+        if self.urgent_tier_guard and self._is_urgent(r):
+            return None
+        low_tier = min(spec.work_tiers, key=lambda t: (t.power_w, t.index))
+        if low_tier.max_batch < 2:
+            return None
+        now = float(w.env.now)
+        est_rem_r = self._est_rem(w, r)
+        best_score = None
+        best_node: int | None = None
+        alpha, offset, gain = pm._rc_probe_coeffs
+        for j, upload_s in upload_options(w, r):
+            if not w.nodes[j]:
+                continue
+            if self.urgent_tier_guard and any(self._is_urgent(x) for x in w.nodes[j]):
+                continue
+            if pm._tier_idx[j] != low_tier.index and pm._explicit_tier_idx[j] != low_tier.index:
+                continue
+            new_batch = len(w.nodes[j]) + 1 + int(w.reserved[j] > 0)
+            if new_batch > low_tier.max_batch:
+                continue
+            start = now + upload_s
+            if w.tr.is_dark(j, start) and low_tier.power_w > spec.p_dark_w + 1e-9:
+                continue
+            cur_t = float(pm.temperature(j))
+            if alpha * cur_t + offset + gain * low_tier.power_w > spec.t_max_c + 1e-9:
+                continue
+            ctx = (
+                sum(x.kv + self._est_rem(w, x) / 2.0 for x in w.nodes[j])
+                + r.pin
+                + est_rem_r / 2.0
+                + w.reserved[j] / w.bpt / 2.0
+            )
+            it = iter_time(new_batch, ctx, low_tier.clock_f, w.gpu)
+            margin_r = self._tier_margin(r.deadline, start)
+            est_fin_r = start + est_rem_r * it
+            if est_fin_r > r.deadline - margin_r:
+                continue
+            it_cur = w.iter_of(j)
+            residents_ok = True
+            for x in w.nodes[j]:
+                rem_x = max(0.0, self._est_rem(w, x) - (upload_s / it_cur if it_cur > 0 else 0.0))
+                margin_x = self._tier_margin(x.deadline, start)
+                if start + rem_x * it > x.deadline - margin_x:
+                    residents_ok = False
+                    break
+            if not residents_ok:
+                continue
+            score = (est_fin_r, new_batch, upload_s, j)
+            if best_score is None or score < best_score:
+                best_score = score
+                best_node = j
+        return best_node
+
+    def place(self, w, r):
+        if self.low_tier_pack:
+            packed = self._low_tier_pack_place(w, r)
+            if packed is not None:
+                return packed
+        return super().place(w, r)
+
     def _run_rebalance(self, w, urgent_relay: bool = False):
         now = w.env.now
         self._last_rebalance_t = now
+        self._update_explicit_tiers(w)
         budget = self.max_inflight - inflight(w)
         if budget <= 0:
             return

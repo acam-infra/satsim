@@ -15,6 +15,8 @@ from satsim.cosim.power_tiers import (
     ACC_ENERGY_J,
     ACC_TIER_TIME_S,
     ACC_TIER_UNSAT_S,
+    ACC_WAKEUP_COUNT,
+    ACC_WAKEUP_ENERGY_J,
     ACC_ZERO_POWER_S,
     DiscretePowerSpec,
     effective_clock_f,
@@ -271,6 +273,13 @@ class DiscreteTierModel:
         self.tier_time_s: dict[int, float] = {t.index: 0.0 for t in self.spec.tiers}
         self.energy_j = 0.0
         self.tier_unsat_s = 0.0
+        self.wakeup_count = 0
+        self.wakeup_energy_j_total = 0.0
+        self._wakeup_ready_t: list[float] = [0.0] * self.n
+
+    def wakeup_wait_s(self, node: int, now: float) -> float:
+        """Remaining cold-start wakeup latency (seconds) on ``node`` at ``now``."""
+        return max(0.0, self._wakeup_ready_t[node] - float(now))
 
     def set_explicit_tier(self, node: int, tier_idx: int | None) -> None:
         self._explicit_tier_idx[node] = tier_idx
@@ -349,8 +358,17 @@ class DiscreteTierModel:
         interval_batch = new_batch if prev_batch is None else prev_batch
         self._advance_node(node, now, int(interval_batch))
         prev_f = self._clock_f[node]
+        prev_tier = self._tier_idx[node]
         op = self.operating_point(node, int(new_batch), is_dark=is_dark, t=now)
-        self._tier_idx[node] = int(op.tier_index if op.tier_index is not None else 0)
+        new_tier = int(op.tier_index if op.tier_index is not None else 0)
+        if prev_tier == 0 and new_tier > 0:
+            self.wakeup_count += 1
+            if self.spec.wakeup_energy_j > 0.0:
+                self.energy_j += self.spec.wakeup_energy_j
+                self.wakeup_energy_j_total += self.spec.wakeup_energy_j
+            if self.spec.wakeup_latency_s > 0.0:
+                self._wakeup_ready_t[node] = float(now) + self.spec.wakeup_latency_s
+        self._tier_idx[node] = new_tier
         self._power_w[node] = op.power_w
         self._clock_f[node] = op.clock_f
         return op.clock_f != prev_f
@@ -497,6 +515,8 @@ class DiscreteTierModel:
             ACC_TIER_TIME_S: dict(self.tier_time_s),
             ACC_ENERGY_J: float(self.energy_j),
             ACC_TIER_UNSAT_S: float(self.tier_unsat_s),
+            ACC_WAKEUP_COUNT: int(self.wakeup_count),
+            ACC_WAKEUP_ENERGY_J: float(self.wakeup_energy_j_total),
         }
 
 

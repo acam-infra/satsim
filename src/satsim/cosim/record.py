@@ -15,6 +15,8 @@ from satsim.cosim.power_tiers import (
     ACC_ENERGY_J,
     ACC_TIER_TIME_S,
     ACC_TIER_UNSAT_S,
+    ACC_WAKEUP_COUNT,
+    ACC_WAKEUP_ENERGY_J,
     ACC_ZERO_POWER_S,
     is_discrete_power,
     parse_discrete_power_spec,
@@ -130,6 +132,10 @@ def summarize(w: CoWorld) -> dict:
         }
         out["energy_kj_total"] = float(w.acc.get(ACC_ENERGY_J, 0.0)) / 1000.0
         out["tier_unsat_s"] = float(w.acc.get(ACC_TIER_UNSAT_S, 0.0))
+        out["wakeup_count"] = int(w.acc.get(ACC_WAKEUP_COUNT, diag.get(ACC_WAKEUP_COUNT, 0) if diag else 0))
+        out["wakeup_energy_j_total"] = float(
+            w.acc.get(ACC_WAKEUP_ENERGY_J, diag.get(ACC_WAKEUP_ENERGY_J, 0.0) if diag else 0.0)
+        )
         out["peak_temp_C"] = peak_temp_c
         out["min_thermal_margin_C"] = (
             spec.t_max_c - peak_temp_c if peak_temp_c is not None else None

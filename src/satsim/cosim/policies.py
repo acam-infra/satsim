@@ -853,6 +853,33 @@ class CoolAware:
                 budget -= 1
 
 
+class LowTierPack:
+    """Pack slack-safe requests onto already-awake low-tier nodes before waking 0W nodes."""
+
+    id = "low_tier_pack"
+
+    def __init__(self, fallback: dict | None = None, tier_slack_margin_s: float = 10.0):
+        self.fallback = make_policy(fallback) if fallback is not None else OrbitLoad(thermal_mode="rc_staged")
+        self.tier_slack_margin_s = float(tier_slack_margin_s)
+
+    def place(self, w, r):
+        from satsim.cosim.discrete_milp import DiscreteThermalMigrator
+
+        helper = getattr(self, "_helper", None)
+        if helper is None:
+            helper = DiscreteThermalMigrator(
+                explicit_tier=True,
+                on_arrival_tier=True,
+                low_tier_pack=True,
+                tier_slack_margin_s=self.tier_slack_margin_s,
+            )
+            self._helper = helper
+        packed = helper._low_tier_pack_place(w, r)
+        if packed is not None:
+            return packed
+        return self.fallback.place(w, r)
+
+
 class CompositePolicy:
     """Orthogonal composition of any Placer (place) and any Migrator (rebalance)."""
 
@@ -863,6 +890,18 @@ class CompositePolicy:
 
     def place(self, w, r):
         return self.placer.place(w, r)
+
+    def on_arrival(self, w, node: int, r) -> None:
+        if hasattr(self.placer, "on_arrival"):
+            self.placer.on_arrival(w, node, r)
+        if self.migrator is not None and hasattr(self.migrator, "on_arrival"):
+            self.migrator.on_arrival(w, node, r)
+
+    def on_departure(self, w, node: int, r) -> None:
+        if hasattr(self.placer, "on_departure"):
+            self.placer.on_departure(w, node, r)
+        if self.migrator is not None and hasattr(self.migrator, "on_departure"):
+            self.migrator.on_departure(w, node, r)
 
     def rebalance(self, w) -> None:
         if self.migrator is not None:
@@ -888,11 +927,74 @@ def _make_discrete_rh_greedy(**kw):
     return DiscreteThermalMigrator(**kw)
 
 
+def _make_discrete_rh_tier(**kw):
+    from satsim.cosim.discrete_milp import DiscreteThermalMigrator, IncrementalGreedySolver
+
+    kw.setdefault("solver", IncrementalGreedySolver())
+    kw.setdefault("explicit_tier", True)
+    return DiscreteThermalMigrator(**kw)
+
+
+def _make_discrete_rh_tier_v2(**kw):
+    from satsim.cosim.discrete_milp import DiscreteThermalMigrator, IncrementalGreedySolver
+
+    kw.setdefault("solver", IncrementalGreedySolver())
+    kw.setdefault("explicit_tier", True)
+    kw.setdefault("on_arrival_tier", True)
+    kw.setdefault("low_tier_pack", True)
+    return DiscreteThermalMigrator(**kw)
+
+
+def _make_discrete_rh_tier_v3(**kw):
+    from satsim.cosim.discrete_milp import DiscreteThermalMigrator, IncrementalGreedySolver
+
+    kw.setdefault("solver", IncrementalGreedySolver())
+    kw.setdefault("explicit_tier", True)
+    kw.setdefault("on_arrival_tier", True)
+    kw.setdefault("low_tier_pack", True)
+    kw.setdefault("tier_slack_ratio", 0.25)
+    kw.setdefault("suppress_low_tier_self_mig", True)
+    kw.setdefault("urgent_tier_guard", True)
+    return DiscreteThermalMigrator(**kw)
+
+
+def _make_discrete_rh_tier_v4(**kw):
+    from satsim.cosim.discrete_milp import DiscreteThermalMigrator, IncrementalGreedySolver
+
+    kw.setdefault("solver", IncrementalGreedySolver())
+    kw.setdefault("explicit_tier", True)
+    kw.setdefault("on_arrival_tier", True)
+    kw.setdefault("low_tier_pack", False)
+    kw.setdefault("tier_slack_ratio", 0.45)
+    kw.setdefault("suppress_low_tier_self_mig", True)
+    kw.setdefault("urgent_tier_guard", True)
+    kw.setdefault("eclipse_lookahead_s", 30.0)
+    return DiscreteThermalMigrator(**kw)
+
+
 def _make_discrete_step_milp(**kw):
     from satsim.cosim.discrete_milp import DiscreteThermalMigrator, StepMilpSolver
 
     kw.setdefault("solver", StepMilpSolver())
     return DiscreteThermalMigrator(**kw)
+
+
+def _make_llumnix_style_mig_only(**kw):
+    from satsim.cosim.topconf_baselines import LlumnixStyleMigOnly
+
+    return LlumnixStyleMigOnly(**kw)
+
+
+def _make_tapas_reactive_thermal(**kw):
+    from satsim.cosim.topconf_baselines import TapasReactiveThermal
+
+    return TapasReactiveThermal(**kw)
+
+
+def _make_mcs_slack_dvfs_no_mig(**kw):
+    from satsim.cosim.topconf_baselines import McsSlackDvfsNoMig
+
+    return McsSlackDvfsNoMig(**kw)
 
 
 PLACERS = {
@@ -910,6 +1012,10 @@ PLACERS = {
     "ephemeris": Ephemeris,
     "orbit_load": OrbitLoad,
     "orbit_thermal": OrbitLoad,
+    "low_tier_pack": LowTierPack,
+    "llumnix_style_mig_only": _make_llumnix_style_mig_only,
+    "tapas_reactive_thermal": _make_tapas_reactive_thermal,
+    "mcs_slack_dvfs_no_mig": _make_mcs_slack_dvfs_no_mig,
 }
 
 MIGRATORS = {
@@ -921,7 +1027,14 @@ MIGRATORS = {
     "torch_rebalance": _make_torch_rebalance,
     "torch_lp": _make_torch_rebalance,
     "discrete_rh_greedy": _make_discrete_rh_greedy,
+    "discrete_rh_tier": _make_discrete_rh_tier,
+    "discrete_rh_tier_v2": _make_discrete_rh_tier_v2,
+    "discrete_rh_tier_v3": _make_discrete_rh_tier_v3,
+    "discrete_rh_tier_v4": _make_discrete_rh_tier_v4,
     "discrete_step_milp": _make_discrete_step_milp,
+    "llumnix_style_mig_only": _make_llumnix_style_mig_only,
+    "tapas_reactive_thermal": _make_tapas_reactive_thermal,
+    "mcs_slack_dvfs_no_mig": _make_mcs_slack_dvfs_no_mig,
 }
 
 POLICIES = {

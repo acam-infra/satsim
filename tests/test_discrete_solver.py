@@ -452,3 +452,15 @@ def test_snapshot_time_ilp_and_rh_greedy_on_small_snapshot() -> None:
     assert rh.objective >= one_hop.objective - 1e-6
     assert rh.objective >= no_plan.objective
     assert rh.zero_w_frac >= no_plan.zero_w_frac
+
+
+def test_discrete_rh_tier_v4_eclipse_lookahead():
+    """discrete_rh_tier_v4 decouples low_tier_pack and relaxes slack threshold before eclipse."""
+    from satsim.cosim.policies import make_policy
+
+    pol = make_policy({"policy": "discrete_rh_tier_v4"})
+    assert pol.id == "discrete_rh_tier_v4"
+    assert pol.explicit_tier is True
+    assert pol.low_tier_pack is False
+    assert pol.eclipse_lookahead_s == 30.0
+    assert pol.tier_slack_ratio == 0.45

@@ -32,6 +32,8 @@ ACC_ZERO_POWER_S = "zero_power_s"      # float: cumulative compute-node seconds 
 ACC_TIER_TIME_S = "tier_time_s"        # dict[int, float]: cumulative compute-node seconds per tier index
 ACC_ENERGY_J = "energy_j"              # float: cumulative Joules across compute nodes
 ACC_TIER_UNSAT_S = "tier_unsat_s"      # float: cumulative node-seconds where batch > max tier capacity
+ACC_WAKEUP_COUNT = "wakeup_count"      # int: cumulative 0W -> working tier transitions
+ACC_WAKEUP_ENERGY_J = "wakeup_energy_j_total"  # float: cumulative 0W cold-start wakeup Joules
 
 
 @dataclass(frozen=True)
@@ -59,6 +61,8 @@ class DiscretePowerSpec:
     t_max_c: float
     thermal_horizon_s: float
     prefer_high_clock: bool = True
+    wakeup_energy_j: float = 0.0
+    wakeup_latency_s: float = 0.0
 
     @property
     def idle_tier(self) -> PowerTier:
@@ -155,6 +159,10 @@ def parse_discrete_power_spec(cfg: dict) -> DiscretePowerSpec | None:
         raise ValueError("thermal.thermal_horizon_s must be positive")
     p_dark_w = float(power["P_dark"])
     prefer_high_clock = bool(power.get("prefer_high_clock", True))
+    wakeup_energy_j = float(power.get("wakeup_energy_j", 0.0))
+    wakeup_latency_s = float(power.get("wakeup_latency_s", 0.0))
+    if wakeup_energy_j < 0.0 or wakeup_latency_s < 0.0:
+        raise ValueError("power.wakeup_energy_j and power.wakeup_latency_s must be non-negative")
 
     return DiscretePowerSpec(
         tiers=tuple(reindexed),
@@ -162,6 +170,8 @@ def parse_discrete_power_spec(cfg: dict) -> DiscretePowerSpec | None:
         t_max_c=t_max_c,
         thermal_horizon_s=horizon_s,
         prefer_high_clock=prefer_high_clock,
+        wakeup_energy_j=wakeup_energy_j,
+        wakeup_latency_s=wakeup_latency_s,
     )
 
 

@@ -28,6 +28,8 @@ from satsim.cosim.power_tiers import (
     ACC_ENERGY_J,
     ACC_TIER_TIME_S,
     ACC_TIER_UNSAT_S,
+    ACC_WAKEUP_COUNT,
+    ACC_WAKEUP_ENERGY_J,
     ACC_ZERO_POWER_S,
     effective_clock_f,
 )
@@ -202,6 +204,8 @@ class CoWorld:
             self.acc[ACC_TIER_TIME_S] = diag[ACC_TIER_TIME_S]
             self.acc[ACC_ENERGY_J] = diag[ACC_ENERGY_J]
             self.acc[ACC_TIER_UNSAT_S] = diag[ACC_TIER_UNSAT_S]
+            self.acc[ACC_WAKEUP_COUNT] = diag[ACC_WAKEUP_COUNT]
+            self.acc[ACC_WAKEUP_ENERGY_J] = diag[ACC_WAKEUP_ENERGY_J]
             return
         self.thermal.advance_with_power(now, self.thermal_power_w)
         for j in self.tr.compute:
@@ -303,12 +307,22 @@ class CoWorld:
         r.state = "decode"
         prev_b = len(self.nodes[j])
         self.nodes[j].append(r)
+        if hasattr(self.policy, "on_arrival"):
+            self.policy.on_arrival(self, j, r)
         self._sync_discrete_node(j, prev_b)
         self.poke(j)
         self.log("admit", req=r.i, node=j)
 
         while r.remaining > 1e-9:  # decode
             j = r.node
+            if isinstance(self.power_model, DiscreteTierModel):
+                wake_wait = self.power_model.wakeup_wait_s(j, self.env.now)
+                if wake_wait > 0.0:
+                    try:
+                        yield self.env.timeout(wake_wait)
+                    except simpy.Interrupt:
+                        pass
+                    continue
             dark = self.tr.is_dark(j, self.env.now)
             it = self.iter_of(j)
             rem_to_next_pull = r.remaining
@@ -368,6 +382,8 @@ class CoWorld:
         j = r.node
         prev_b = len(self.nodes[j])
         self.nodes[j].remove(r)
+        if hasattr(self.policy, "on_departure"):
+            self.policy.on_departure(self, j, r)
         self._sync_discrete_node(j, prev_b)
         self.poke(j)
         t_conn = self.tr.next_conn(r.origin, j, self.env.now)
@@ -447,12 +463,16 @@ class CoWorld:
             return
         prev_src = len(self.nodes[src])
         self.nodes[src].remove(r)
+        if hasattr(self.policy, "on_departure"):
+            self.policy.on_departure(self, src, r)
         self._sync_discrete_node(src, prev_src)
         r.node = dst
         r.trail.append(dst)
         r.n_mig += 1
         prev_dst = len(self.nodes[dst])
         self.nodes[dst].append(r)
+        if hasattr(self.policy, "on_arrival"):
+            self.policy.on_arrival(self, dst, r)
         self._sync_discrete_node(dst, prev_dst)
         self.acc["mig"] += 1
         self.acc["mig_bytes"] += nbytes
