@@ -1027,6 +1027,28 @@ def _make_discrete_rh_tier_v7(**kw):
     return DiscreteThermalMigrator(**kw)
 
 
+def _make_discrete_rh_tier_v8(**kw):
+    from satsim.cosim.discrete_milp import DiscreteThermalMigrator, IncrementalGreedySolver
+
+    kw.setdefault("solver", IncrementalGreedySolver())
+    kw.setdefault("explicit_tier", True)
+    kw.setdefault("on_arrival_tier", True)
+    kw.setdefault("low_tier_pack", False)
+    kw.setdefault("tier_slack_ratio", 0.35)
+    kw.setdefault("suppress_low_tier_self_mig", True)
+    kw.setdefault("urgent_tier_guard", True)
+    kw.setdefault("eclipse_lookahead_s", 30.0)
+    kw.setdefault("thermal_precool_horizon_s", 30.0)
+    kw.setdefault("soft_thermal_gate", True)
+    kw.setdefault("urgent_isolation", True)
+    kw.setdefault("strict_urgent_isolation", True)
+    kw.setdefault("delivery_aware_tier", True)
+    kw.setdefault("prefill_burst", True)
+    kw.setdefault("recompute_aware", True)
+    kw.setdefault("id_override", "discrete_rh_tier_v8")
+    return DiscreteThermalMigrator(**kw)
+
+
 def _make_discrete_step_milp(**kw):
     from satsim.cosim.discrete_milp import DiscreteThermalMigrator, StepMilpSolver
 
@@ -1089,6 +1111,7 @@ MIGRATORS = {
     "discrete_rh_tier_v5": _make_discrete_rh_tier_v5,
     "discrete_rh_tier_v6": _make_discrete_rh_tier_v6,
     "discrete_rh_tier_v7": _make_discrete_rh_tier_v7,
+    "discrete_rh_tier_v8": _make_discrete_rh_tier_v8,
     "discrete_step_milp": _make_discrete_step_milp,
     "llumnix_style_mig_only": _make_llumnix_style_mig_only,
     "tapas_reactive_thermal": _make_tapas_reactive_thermal,

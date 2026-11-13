@@ -234,9 +234,10 @@ class DiscreteThermalMigrator(TorchRebalance):
         strict_urgent_isolation: bool = False,
         delivery_aware_tier: bool = False,
         prefill_burst: bool = False,
+        recompute_aware: bool = False,
         id_override: str | None = None,
     ):
-        if placement is None and low_tier_pack and not explicit_tier:
+        if placement is None and not explicit_tier:
             placement = {"policy": "orbit_load", "thermal_mode": "rc_staged"}
         elif placement is None and explicit_tier:
             placement = {"policy": "orbit_load"}
@@ -266,10 +267,13 @@ class DiscreteThermalMigrator(TorchRebalance):
         self.strict_urgent_isolation = bool(strict_urgent_isolation)
         self.delivery_aware_tier = bool(delivery_aware_tier)
         self.prefill_burst = bool(prefill_burst)
+        self.recompute_aware = bool(recompute_aware)
         if id_override is not None:
             self.id = str(id_override)
         elif self.explicit_tier:
-            if self.prefill_burst:
+            if self.recompute_aware:
+                self.id = "discrete_rh_tier_v8"
+            elif self.prefill_burst:
                 self.id = "discrete_rh_tier_v7"
             elif self.soft_thermal_gate or self.strict_urgent_isolation:
                 self.id = "discrete_rh_tier_v6"
@@ -489,8 +493,13 @@ class DiscreteThermalMigrator(TorchRebalance):
                 if not empties_src_to_0w and stay_s > 0.96 and relief_s < 0.03 and relief_t < 15.0:
                     continue
 
-                nbytes = r.kv * w.bpt
-                dst_paths: list[tuple[int, tuple[list[int], list[int]], float]] = []
+                kv_bytes = r.kv * w.bpt
+                recompute_bytes = max(4096.0, float(r.pin + int(r.gen)) * 4.0)
+                t_pref = float(w.gpu.get("t_prefill_tok_s", 0.0))
+                can_recompute = self.recompute_aware and t_pref > 0.0
+                if r.state == "prefill" and not can_recompute:
+                    continue
+                dst_paths: list[tuple[int, tuple[list[int], list[int]], float, float, str]] = []
                 for dst in dst_candidates:
                     if dst == src or not w.fits(dst, r):
                         continue
@@ -499,9 +508,28 @@ class DiscreteThermalMigrator(TorchRebalance):
                         if not p[1]:
                             continue
                         bw = min(w.net.cap[e] / (edge_users.get(e, 0) + 1) for e in p[1])
-                        d_p = nbytes / bw + w.hop_lat * len(p[1]) + w.switch_s
-                        if path_lifetime(w, p) >= now + 1.25 * d_p and d_p < w.mig_timeout:
-                            dst_paths.append((dst, p, d_p))
+                        lat_sw = w.hop_lat * len(p[1]) + w.switch_s
+                        kv_d_p = kv_bytes / bw + lat_sw
+                        if r.state == "prefill":
+                            net_d_p = recompute_bytes / bw + lat_sw
+                            eff_d_p = net_d_p + max(0.0, (float(r.pin) - float(r.prefill_rem)) * t_pref)
+                            mig_nbytes, mig_mode = recompute_bytes, "recompute"
+                        elif can_recompute:
+                            rec_tx_s = recompute_bytes / bw + lat_sw
+                            rec_comp_s = (float(r.pin) + float(r.gen)) * t_pref
+                            if (rec_tx_s + rec_comp_s < kv_d_p * 0.85) or (
+                                kv_d_p >= w.mig_timeout and rec_tx_s < w.mig_timeout
+                            ):
+                                net_d_p, eff_d_p = rec_tx_s, rec_tx_s + rec_comp_s
+                                mig_nbytes, mig_mode = recompute_bytes, "recompute"
+                            else:
+                                net_d_p, eff_d_p = kv_d_p, kv_d_p
+                                mig_nbytes, mig_mode = kv_bytes, "kv"
+                        else:
+                            net_d_p, eff_d_p = kv_d_p, kv_d_p
+                            mig_nbytes, mig_mode = kv_bytes, "kv"
+                        if path_lifetime(w, p) >= now + 1.25 * net_d_p and net_d_p < w.mig_timeout:
+                            dst_paths.append((dst, p, eff_d_p, mig_nbytes, mig_mode))
                             break
                     if len(dst_paths) >= 14:
                         break
@@ -511,7 +539,7 @@ class DiscreteThermalMigrator(TorchRebalance):
                 dst_paths.sort(key=lambda item: len(item[1][1]) > 1)
                 has_good_1hop = False
                 feasible = 0
-                for dst, p, delay in dst_paths:
+                for dst, p, delay, mig_nbytes, mig_mode in dst_paths:
                     hops = len(p[1])
                     # 2~3 hop congestion gate: only use multi-hop when 1-hop has no good cool option
                     # AND relay edges have enough uncongested headroom.
@@ -606,7 +634,7 @@ class DiscreteThermalMigrator(TorchRebalance):
                                 src=src,
                                 dst=dst,
                                 path=p,
-                                nbytes=nbytes,
+                                nbytes=mig_nbytes,
                                 delay_s=delay,
                                 gain=gain,
                                 delta_power_w=delta_power_w,
@@ -617,6 +645,7 @@ class DiscreteThermalMigrator(TorchRebalance):
                                     "dst_cap": free_slots[dst],
                                     "edge_cap": edge_cap_map,
                                     "marginal_eval": _make_marginal(),
+                                    "mode": mig_mode,
                                 },
                             )
                         )
@@ -892,7 +921,7 @@ class DiscreteThermalMigrator(TorchRebalance):
             return
         selected = self.solver.solve(w, candidates, budget=budget, now=now)
         for c in selected:
-            w.migrate(c.req, c.dst, path=c.path)
+            w.migrate(c.req, c.dst, path=c.path, mode=c.meta.get("mode", "kv"))
 
 
 @dataclass(frozen=True)

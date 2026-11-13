@@ -75,6 +75,7 @@ class CRequest:
     tether_bytes: float = 0.0  # cumulative bytes fetched from anchor_node across ISLs
     urgent: bool = False  # mixed-criticality urgent SLA class
     prefill_rem: float = 0.0  # remaining input prompt tokens to prefill when t_prefill_tok_s > 0
+    n_recompute: int = 0  # number of token-recompute migrations completed
 
     @property
     def reaccess_remaining(self) -> int:
@@ -130,6 +131,7 @@ class CoWorld:
         self.reqs: list[CRequest] = []
         self.topo_event = env.event()
         self.acc = dict(mig=0, mig_abort=0, mig_bytes=0.0, delta_kv_bytes=0.0,
+                        recompute_mig=0, recompute_bytes=0.0,
                         upload_fail=0, throttle_s=0.0)
         self.thermal = getattr(self.power_model, "thermal", None)
         self.thermal_f = [self.thermal.clock_factor(j, 0.0) if self.thermal else 1.0 for j in range(trace.n)]
@@ -328,39 +330,42 @@ class CoWorld:
         self.poke(j)
         self.log("admit", req=r.i, node=j)
 
-        while r.prefill_rem > 1e-9:  # prefill
-            j = r.node
-            if isinstance(self.power_model, DiscreteTierModel):
-                wake_wait = self.power_model.wakeup_wait_s(j, self.env.now)
-                if wake_wait > 0.0:
-                    try:
-                        yield self.env.timeout(wake_wait)
-                    except simpy.Interrupt:
-                        pass
-                    continue
-            pf = max(1e-6, self.prefill_f_of(j))
-            n_pref = max(1, sum(1 for x in self.nodes[j] if x.state == "prefill"))
-            pt = t_prefill_tok_s * n_pref / pf
-            step = min(CHUNK_S, pt * r.prefill_rem)
-            t0, p0 = self.env.now, r.prefill_rem
-            r.decode_step = (t0, pt)
-            try:
-                yield self.env.timeout(max(step, 1e-9))
-            except simpy.Interrupt:
-                pass
-            r.decode_step = None
-            dt = self.env.now - t0
-            r.prefill_rem = max(0.0, p0 - (dt / pt if pt > 0 else 0.0))
-            if self.stream and dt > 0:
-                r.stall_s += self.tr.disconnected_time(r.origin, j, t0, self.env.now)
-        if has_prefill:
-            r.state = "decode"
-            if hasattr(self.policy, "on_prefill_done"):
-                self.policy.on_prefill_done(self, r.node, r)
-            self._sync_discrete_node(r.node, len(self.nodes[r.node]))
-            self.poke(r.node)
+        while r.remaining > 1e-9:  # prefill (initial or post-recompute) + decode
+            if r.prefill_rem > 1e-9 and t_prefill_tok_s > 0.0:
+                r.state = "prefill"
+                j = r.node
+                if isinstance(self.power_model, DiscreteTierModel):
+                    wake_wait = self.power_model.wakeup_wait_s(j, self.env.now)
+                    if wake_wait > 0.0:
+                        try:
+                            yield self.env.timeout(wake_wait)
+                        except simpy.Interrupt:
+                            pass
+                        continue
+                pf = max(1e-6, self.prefill_f_of(j))
+                n_pref = max(1, sum(1 for x in self.nodes[j] if x.state == "prefill"))
+                pt = t_prefill_tok_s * n_pref / pf
+                step = min(CHUNK_S, pt * r.prefill_rem)
+                t0, p0 = self.env.now, r.prefill_rem
+                r.decode_step = (t0, pt)
+                try:
+                    yield self.env.timeout(max(step, 1e-9))
+                except simpy.Interrupt:
+                    pass
+                r.decode_step = None
+                dt = self.env.now - t0
+                r.prefill_rem = max(0.0, p0 - (dt / pt if pt > 0 else 0.0))
+                if self.stream and dt > 0:
+                    r.stall_s += self.tr.disconnected_time(r.origin, j, t0, self.env.now)
+                if r.prefill_rem <= 1e-9:
+                    r.prefill_rem = 0.0
+                    r.state = "decode"
+                    if hasattr(self.policy, "on_prefill_done"):
+                        self.policy.on_prefill_done(self, r.node, r)
+                    self._sync_discrete_node(r.node, len(self.nodes[r.node]))
+                    self.poke(r.node)
+                continue
 
-        while r.remaining > 1e-9:  # decode
             j = r.node
             if isinstance(self.power_model, DiscreteTierModel):
                 wake_wait = self.power_model.wakeup_wait_s(j, self.env.now)
@@ -448,24 +453,35 @@ class CoWorld:
         self.log("deliver", req=r.i, node=j, o=r.origin, path=p[0] if p else [j, r.origin])
 
     # -- migration ---------------------------------------------------------------------------
-    def migrate(self, r: CRequest, dst: int, path: tuple[list[int], list[int]] | None = None) -> bool:
-        if r.migrating or r.state != "decode" or dst == r.node:
+    def migrate(
+        self,
+        r: CRequest,
+        dst: int,
+        path: tuple[list[int], list[int]] | None = None,
+        mode: str = "kv",
+    ) -> bool:
+        if mode not in ("kv", "recompute"):
+            raise ValueError(f"unknown migration mode {mode!r}")
+        valid_states = ("prefill", "decode") if mode == "recompute" else ("decode",)
+        if r.migrating or r.state not in valid_states or dst == r.node:
             return False
         p = path if path is not None else self.tr.path(r.node, dst, self.env.now)
         if p is None or not self.fits(dst, r):
             return False
-        self.env.process(self._migrate(r, r.node, dst, p))
+        self.env.process(self._migrate(r, r.node, dst, p, mode=mode))
         return True
 
-    def _migrate(self, r: CRequest, src: int, dst: int, p):
+    def _migrate(self, r: CRequest, src: int, dst: int, p, mode: str = "kv"):
         r.migrating = True
         need = r.reserved_tokens * self.bpt
         self.reserved[dst] += need
         start_t = self.env.now
         gen_start = r.progress_at(start_t)
-        nbytes = r.kv * self.bpt
-        f = self.net.add("mig", p[0], p[1], nbytes, req=r.i)
-        self.log("mig", req=r.i, src=src, dst=dst, path=p[0], GB=nbytes / 1e9)
+        is_recompute = mode == "recompute"
+        nbytes = max(4096.0, float(r.pin + int(r.gen)) * 4.0) if is_recompute else (r.kv * self.bpt)
+        tag = "mig_recompute" if is_recompute else "mig"
+        f = self.net.add(tag, p[0], p[1], nbytes, req=r.i)
+        self.log(tag, req=r.i, src=src, dst=dst, path=p[0], GB=nbytes / 1e9)
         yield f.done | self.env.timeout(self.mig_timeout)
         ok = f.done.triggered and not f.failed
         if not ok:
@@ -474,7 +490,7 @@ class CoWorld:
             # While the source keeps decoding, the KV stream falls behind. Send up to two
             # tail flows for the tokens produced during each transfer; the residual after the
             # second round is handed over locally during the switch (no third flow).
-            if self.delta_kv:
+            if self.delta_kv and not is_recompute:
                 for _ in range(self.max_delta_kv_rounds):
                     if r.state != "decode" or r.node != src:
                         break
@@ -506,7 +522,8 @@ class CoWorld:
             self.acc["mig_abort"] += 1
             self.log("mig_abort", req=r.i, src=src, dst=dst)
             return
-        if r.state != "decode" or r.node != src:  # finished at the source meanwhile
+        valid_states = ("prefill", "decode") if is_recompute else ("decode",)
+        if r.state not in valid_states or r.node != src:  # finished at the source meanwhile
             return
         prev_src = len(self.nodes[src])
         self.nodes[src].remove(r)
@@ -516,6 +533,14 @@ class CoWorld:
         r.node = dst
         r.trail.append(dst)
         r.n_mig += 1
+        if is_recompute:
+            r.n_recompute += 1
+            t_prefill_tok_s = float(self.gpu.get("t_prefill_tok_s", 0.0))
+            if t_prefill_tok_s > 0.0:
+                r.prefill_rem = float(r.pin) + float(r.gen)
+                r.state = "prefill"
+            self.acc["recompute_mig"] += 1
+            self.acc["recompute_bytes"] += nbytes
         prev_dst = len(self.nodes[dst])
         self.nodes[dst].append(r)
         if hasattr(self.policy, "on_arrival"):
@@ -523,7 +548,7 @@ class CoWorld:
         self._sync_discrete_node(dst, prev_dst)
         self.acc["mig"] += 1
         self.acc["mig_bytes"] += nbytes
-        self.log("mig_done", req=r.i, src=src, dst=dst)
+        self.log("mig_recompute_done" if is_recompute else "mig_done", req=r.i, src=src, dst=dst)
         self.poke(src)
         self.poke(dst)
 
