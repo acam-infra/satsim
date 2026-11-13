@@ -19,6 +19,7 @@ from pathlib import Path
 import simpy
 import yaml
 
+from satsim.cosim.interfaces import accepts_rebalance_quota
 from satsim.cosim.policies import make_policy
 from satsim.cosim.record import Recorder, cumulative_good, request_table, summarize
 from satsim.cosim.trace import Trace
@@ -27,8 +28,6 @@ from satsim.cosim.world import CoWorld, make_requests
 REQUIRED = {"name", "trace", "scenario", "model", "gpu", "power", "net", "migration", "workload",
             "slo", "delivery", "control_period_s", "policies", "seeds"}
 REBALANCE_INVARIANT_KEYS = ("interval_s", "max_inflight", "max_mig_per_req")
-_INVARIANT_TARGETS = {"thermal_rebalance", "torch_rebalance", "torch_lp"}
-_INVARIANT_MIGRATORS = {"reactive", "contact_aware", "cool_aware"}
 
 
 def apply_rebalance_invariants(cfg: dict, spec: dict) -> dict:
@@ -45,12 +44,7 @@ def apply_rebalance_invariants(cfg: dict, spec: dict) -> dict:
         raise ValueError("rebalance_invariants must be a mapping")
     out = copy.deepcopy(spec)
     kind = out.get("policy")
-    if kind in _INVARIANT_TARGETS or kind in _INVARIANT_MIGRATORS:
-        accepts = True
-    elif "place" in out:
-        accepts = out.get("migrate", "none") in _INVARIANT_MIGRATORS
-    else:
-        accepts = False
+    accepts = accepts_rebalance_quota(make_policy(out))
     if not accepts:
         return out
     for key in REBALANCE_INVARIANT_KEYS:

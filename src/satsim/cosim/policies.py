@@ -840,6 +840,32 @@ class CompositePolicy:
             self.migrator.rebalance(w)
 
 
+def _make_thermal_rebalance(**kw):
+    from satsim.cosim.thermal_rebalance import ThermalRebalance
+
+    return ThermalRebalance(**kw)
+
+
+def _make_torch_rebalance(**kw):
+    from satsim.cosim.thermal_rebalance import TorchRebalance
+
+    return TorchRebalance(**kw)
+
+
+def _make_discrete_rh_greedy(**kw):
+    from satsim.cosim.discrete_milp import DiscreteThermalMigrator, IncrementalGreedySolver
+
+    kw.setdefault("solver", IncrementalGreedySolver())
+    return DiscreteThermalMigrator(**kw)
+
+
+def _make_discrete_step_milp(**kw):
+    from satsim.cosim.discrete_milp import DiscreteThermalMigrator, StepMilpSolver
+
+    kw.setdefault("solver", StepMilpSolver())
+    return DiscreteThermalMigrator(**kw)
+
+
 PLACERS = {
     "rr": RoundRobinPlacer,
     "round_robin": RoundRobinPlacer,
@@ -862,13 +888,20 @@ MIGRATORS = {
     "reactive": Reactive,
     "contact_aware": ContactAware,
     "cool_aware": CoolAware,
+    "thermal_rebalance": _make_thermal_rebalance,
+    "torch_rebalance": _make_torch_rebalance,
+    "torch_lp": _make_torch_rebalance,
+    "discrete_rh_greedy": _make_discrete_rh_greedy,
+    "discrete_step_milp": _make_discrete_step_milp,
 }
 
 POLICIES = {
     **PLACERS,
-    "reactive": Reactive,
-    "contact_aware": ContactAware,
-    "cool_aware": CoolAware,
+    **{k: v for k, v in MIGRATORS.items() if v is not None},
+    # Legacy standalone policy aliases preserved for backward compatibility
+    "round_robin": RoundRobin,
+    "random": lambda **_kw: RoundRobin(mode="random"),
+    "least_loaded": lambda **_kw: RoundRobin(mode="least_loaded"),
 }
 
 
@@ -887,21 +920,6 @@ def make_policy(spec: dict):
         return CompositePolicy(placer, migrator)
     kind = spec["policy"]
     kw = {k: v for k, v in spec.items() if k != "policy"}
-    if kind == "thermal_rebalance":
-        from satsim.cosim.thermal_rebalance import ThermalRebalance
-
-        return ThermalRebalance(**kw)
-    if kind in ("torch_rebalance", "torch_lp"):
-        from satsim.cosim.thermal_rebalance import TorchRebalance
-
-        return TorchRebalance(**kw)
-    table = {"greedy": Greedy, "ephemeris": Ephemeris, "reactive": Reactive, "contact_aware": ContactAware,
-             "cool_aware": CoolAware,
-             "round_robin": RoundRobin,
-             "random": lambda **_kw: RoundRobin(mode="random"),
-             "least_loaded": lambda **_kw: RoundRobin(mode="least_loaded"),
-             "round_robin_all": ReachableRoundRobin, "least_reserved_kv": LeastReservedKV,
-             "nearest": Nearest, "orbit_load": OrbitLoad, "orbit_thermal": OrbitLoad}
-    if kind not in table:
-        raise ValueError(f"unknown cosim policy {kind!r}; one of {sorted(table)}")
-    return table[kind](**kw)
+    if kind not in POLICIES:
+        raise ValueError(f"unknown cosim policy {kind!r}; one of {sorted(POLICIES)}")
+    return POLICIES[kind](**kw)
