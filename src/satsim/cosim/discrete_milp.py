@@ -230,8 +230,10 @@ class DiscreteThermalMigrator(TorchRebalance):
         eclipse_lookahead_s: float = 0.0,
         id_override: str | None = None,
     ):
-        if placement is None and (explicit_tier or low_tier_pack):
+        if placement is None and low_tier_pack and not explicit_tier:
             placement = {"policy": "orbit_load", "thermal_mode": "rc_staged"}
+        elif placement is None and explicit_tier:
+            placement = {"policy": "orbit_load"}
         super().__init__(
             placement=placement,
             interval_s=interval_s,
@@ -350,9 +352,19 @@ class DiscreteThermalMigrator(TorchRebalance):
         fc.advance(start_t, horizon_s, len(jobs))
         return fc.temp <= t_max + 1e-6
 
-    @staticmethod
-    def _is_urgent(r) -> bool:
-        return bool(getattr(r, "urgent", False) or getattr(r, "criticality", None) == "urgent")
+    def _is_urgent(self, r, w=None, now: float | None = None) -> bool:
+        explicit_urg = getattr(r, "urgent", None)
+        if explicit_urg is not None:
+            return bool(explicit_urg)
+        crit = getattr(r, "criticality", None)
+        if crit is not None:
+            return str(crit).lower() in ("hi", "high", "urgent", "critical")
+        if w is not None and now is not None:
+            rem_tok = self._est_rem(w, r)
+            ideal_it = iter_time(1, r.pin + r.gen + rem_tok / 2.0, 1.0, w.gpu)
+            ideal_s = max(1e-6, rem_tok * ideal_it)
+            return (r.deadline - now) / ideal_s <= 2.2
+        return False
 
     def _tier_margin(self, deadline: float, now: float, ratio_override: float | None = None) -> float:
         rem_slack = max(0.0, deadline - now)
@@ -579,7 +591,7 @@ class DiscreteThermalMigrator(TorchRebalance):
 
     def _est_rem(self, w, r) -> float:
         wl = getattr(w, "cfg", {}).get("workload") or {}
-        key = "long_out" if r.long else "short_out"
+        key = "long_out" if getattr(r, "long", False) else "short_out"
         if key in wl:
             return self._mean_rem(w, r)
         return max(1.0, float(getattr(r, "remaining", 1.0)))
@@ -592,9 +604,9 @@ class DiscreteThermalMigrator(TorchRebalance):
         jobs = w.nodes[node]
         if not jobs:
             return None
-        if self.urgent_tier_guard and any(self._is_urgent(x) for x in jobs):
-            return None
         now = float(w.env.now)
+        if self.urgent_tier_guard and any(self._is_urgent(x, w, now) for x in jobs):
+            return None
         batch = len(jobs)
         is_dark = bool(w.tr.is_dark(node, now))
         approaching_dark = (
@@ -603,12 +615,18 @@ class DiscreteThermalMigrator(TorchRebalance):
             and bool(w.tr.is_dark(node, now + self.eclipse_lookahead_s))
         )
         cur_t = float(pm.temperature(node))
+        # Pre-eclipse sprint: when about to enter an eclipse with P_dark < P_high and thermal
+        # headroom is safe, keep high tier to drain tokens before the dark slowdown.
+        if (
+            approaching_dark
+            and spec.p_dark_w < max(t.power_w for t in spec.work_tiers) - 1e-9
+            and cur_t < spec.t_max_c - 6.0
+        ):
+            return None
         alpha, offset, gain = pm._rc_probe_coeffs
         ctx = sum(x.kv + self._est_rem(w, x) / 2.0 for x in jobs)
         eff_ratio = self.tier_slack_ratio
-        if approaching_dark and spec.p_dark_w < max(t.power_w for t in spec.work_tiers) - 1e-9:
-            eff_ratio = min(eff_ratio, 0.20) if eff_ratio > 0.0 else 0.20
-        elif self.eclipse_lookahead_s > 0.0 and cur_t >= spec.t_max_c - 8.0:
+        if self.eclipse_lookahead_s > 0.0 and cur_t >= spec.t_max_c - 8.0:
             eff_ratio = min(eff_ratio, 0.20) if eff_ratio > 0.0 else 0.20
         for tk in sorted(spec.work_tiers, key=lambda t: (t.power_w, t.index)):
             if tk.max_batch < batch:
@@ -649,12 +667,12 @@ class DiscreteThermalMigrator(TorchRebalance):
         spec = self._spec(w)
         if pm is None or spec is None or len(spec.work_tiers) < 2 or not hasattr(pm, "_tier_idx"):
             return None
-        if self.urgent_tier_guard and self._is_urgent(r):
+        now = float(w.env.now)
+        if self.urgent_tier_guard and self._is_urgent(r, w, now):
             return None
         low_tier = min(spec.work_tiers, key=lambda t: (t.power_w, t.index))
         if low_tier.max_batch < 2:
             return None
-        now = float(w.env.now)
         est_rem_r = self._est_rem(w, r)
         best_score = None
         best_node: int | None = None
@@ -662,7 +680,7 @@ class DiscreteThermalMigrator(TorchRebalance):
         for j, upload_s in upload_options(w, r):
             if not w.nodes[j]:
                 continue
-            if self.urgent_tier_guard and any(self._is_urgent(x) for x in w.nodes[j]):
+            if self.urgent_tier_guard and any(self._is_urgent(x, w, now) for x in w.nodes[j]):
                 continue
             if pm._tier_idx[j] != low_tier.index and pm._explicit_tier_idx[j] != low_tier.index:
                 continue

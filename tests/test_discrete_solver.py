@@ -455,7 +455,7 @@ def test_snapshot_time_ilp_and_rh_greedy_on_small_snapshot() -> None:
 
 
 def test_discrete_rh_tier_v4_eclipse_lookahead():
-    """discrete_rh_tier_v4 decouples low_tier_pack and relaxes slack threshold before eclipse."""
+    """discrete_rh_tier_v4 decouples low_tier_pack, uses orbit_load dvfs placement, and pre-sprints before eclipse."""
     from satsim.cosim.policies import make_policy
 
     pol = make_policy({"policy": "discrete_rh_tier_v4"})
@@ -464,3 +464,39 @@ def test_discrete_rh_tier_v4_eclipse_lookahead():
     assert pol.low_tier_pack is False
     assert pol.eclipse_lookahead_s == 30.0
     assert pol.tier_slack_ratio == 0.45
+    assert pol.placement.id == "orbit_thermal"
+
+
+def test_discrete_rh_tier_v4_pre_eclipse_sprint_and_dynamic_urgent():
+    """approaching_dark with thermal headroom keeps high tier (None); dynamic slack classifies urgent reqs."""
+    from types import SimpleNamespace
+    from satsim.cosim.policies import make_policy
+
+    pol = make_policy({"policy": "discrete_rh_tier_v4"})
+    spec = SimpleNamespace(
+        p_dark_w=80.0,
+        t_max_c=80.0,
+        work_tiers=[
+            SimpleNamespace(index=1, power_w=75.0, max_batch=4, clock_f=0.50),
+            SimpleNamespace(index=2, power_w=300.0, max_batch=12, clock_f=1.00),
+        ],
+    )
+    pol._spec = lambda _w: spec  # type: ignore[method-assign]
+    pm = SimpleNamespace(
+        set_explicit_tier=lambda *_a, **_kw: None,
+        temperature=lambda _n: 50.0,
+        _rc_probe_coeffs=(0.98, 0.4, 0.005),
+    )
+    req_loose = SimpleNamespace(pin=500, gen=0, remaining=200, deadline=500.0)
+    w = SimpleNamespace(
+        env=SimpleNamespace(now=100.0),
+        power_model=pm,
+        nodes={1: [req_loose]},
+        tr=SimpleNamespace(is_dark=lambda _n, t: t >= 120.0),
+        gpu={"t_fixed_s": 0.003, "t_weights_s": 0.01, "t_kv_tok_s": 1e-7, "t_seq_s": 5e-5, "mem_freq_exp": 0.6},
+        cfg={},
+    )
+    assert pol._select_explicit_tier_for_node(w, 1) is None
+    req_urg = SimpleNamespace(pin=4000, gen=0, remaining=20000, deadline=110.0)
+    assert pol._is_urgent(req_urg, w, 100.0) is True
+    assert pol._is_urgent(req_loose, w, 100.0) is False
