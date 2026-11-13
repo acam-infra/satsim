@@ -11,6 +11,14 @@ from __future__ import annotations
 
 import statistics as st
 
+from satsim.cosim.power_tiers import (
+    ACC_ENERGY_J,
+    ACC_TIER_TIME_S,
+    ACC_TIER_UNSAT_S,
+    ACC_ZERO_POWER_S,
+    is_discrete_power,
+    parse_discrete_power_spec,
+)
 from satsim.cosim.world import CoWorld
 
 
@@ -70,7 +78,7 @@ def summarize(w: CoWorld) -> dict:
     horizon = w.tr.horizon
     lat_all = [r.t_delivered - r.t if r.t_delivered is not None else horizon - r.t for r in rs]
     lat_long_all = [r.t_delivered - r.t if r.t_delivered is not None else horizon - r.t for r in longs]
-    return {
+    out = {
         "n_req": len(rs),
         "n_long": len(longs),
         "delivered": len(delivered),
@@ -98,6 +106,35 @@ def summarize(w: CoWorld) -> dict:
         "long_p95_all_s": _pct(lat_long_all, 95),
         "throttle_s": float(w.acc.get("throttle_s", 0.0)),
     }
+    if is_discrete_power(w.cfg):
+        spec = parse_discrete_power_spec(w.cfg)
+        assert spec is not None
+        total_node_s = max(1e-9, len(w.tr.compute) * horizon)
+        tier_time_s = w.acc.get(ACC_TIER_TIME_S) or {}
+        zero_s = float(w.acc.get(ACC_ZERO_POWER_S, tier_time_s.get(0, 0.0)))
+        tier_sum = sum(float(v) for v in tier_time_s.values())
+        denom = tier_sum if tier_sum > 0.0 else total_node_s
+
+        peak_temp_c: float | None = None
+        diag = w.power_model.diagnostics() if hasattr(w, "power_model") else None
+        if diag is None and w.thermal is not None:
+            diag = w.thermal.diagnostics()
+        if diag and diag.get("peak_T_C"):
+            peaks = [float(diag["peak_T_C"][j]) for j in w.tr.compute]
+            if peaks:
+                peak_temp_c = max(peaks)
+
+        out["zero_power_frac"] = zero_s / total_node_s
+        out["power_tier_fracs"] = {
+            t.name: float(tier_time_s.get(t.index, 0.0)) / denom for t in spec.tiers
+        }
+        out["energy_kj_total"] = float(w.acc.get(ACC_ENERGY_J, 0.0)) / 1000.0
+        out["tier_unsat_s"] = float(w.acc.get(ACC_TIER_UNSAT_S, 0.0))
+        out["peak_temp_C"] = peak_temp_c
+        out["min_thermal_margin_C"] = (
+            spec.t_max_c - peak_temp_c if peak_temp_c is not None else None
+        )
+    return out
 
 
 def cumulative_good(w: CoWorld, step: float) -> list[list[float]]:

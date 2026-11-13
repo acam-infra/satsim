@@ -23,9 +23,16 @@ from dataclasses import dataclass, field
 import simpy
 
 from satsim.cosim.net import FluidNet
+from satsim.cosim.power_model import DiscreteTierModel, make_power_thermal_model
+from satsim.cosim.power_tiers import (
+    ACC_ENERGY_J,
+    ACC_TIER_TIME_S,
+    ACC_TIER_UNSAT_S,
+    ACC_ZERO_POWER_S,
+    effective_clock_f,
+)
 from satsim.cosim.trace import INF, Trace
 from satsim.method.engine.timing import clock_factor, iter_time, kv_bytes_per_tok
-from satsim.method.policies.thermal.dynamic import DynamicThermal
 
 CHUNK_S = 30.0  # longest decode step between re-evaluations when nothing pokes the request
 
@@ -100,7 +107,11 @@ class CoWorld:
         self.gpu = cfg["gpu"]
         self.bpt = kv_bytes_per_tok(cfg["model"])
         self.kv_cap = float(self.gpu["kv_gib"]) * 2**30
-        self.f_dark = clock_factor(float(cfg["power"]["P_dark"]), cfg["power"])
+        self.power_model = make_power_thermal_model(cfg, trace.n)
+        if isinstance(self.power_model, DiscreteTierModel):
+            self.f_dark = effective_clock_f(self.power_model.spec, 1, is_eclipse=True)
+        else:
+            self.f_dark = clock_factor(float(cfg["power"]["P_dark"]), cfg["power"])
         caps = cfg["net"]["link_gbps"]
         self.net = FluidNet(env, [float(caps[k]) * 1e9 / 8 for k in trace.kind])
         self.hop_lat = float(cfg["net"]["hop_latency_s"])
@@ -116,23 +127,25 @@ class CoWorld:
         self.topo_event = env.event()
         self.acc = dict(mig=0, mig_abort=0, mig_bytes=0.0, delta_kv_bytes=0.0,
                         upload_fail=0, throttle_s=0.0)
-        thermal_cfg = cfg.get("thermal")
-        self.thermal = DynamicThermal({**cfg["power"], **thermal_cfg}, n=trace.n) if thermal_cfg else None
+        self.thermal = getattr(self.power_model, "thermal", None)
         self.thermal_f = [self.thermal.clock_factor(j, 0.0) if self.thermal else 1.0 for j in range(trace.n)]
-        self.thermal_power_w = [float(cfg["power"]["P_idle"])] * trace.n
+        self.thermal_power_w = [float(cfg["power"].get("P_idle", 0.0))] * trace.n
         env.process(self._changes())
         env.process(self._control())
 
     # -- node state --------------------------------------------------------------------------
     def f_of(self, j: int, t: float | None = None) -> float:
+        if isinstance(self.power_model, DiscreteTierModel):
+            now = self.env.now if t is None else t
+            return self.power_model.operating_point(
+                j, len(self.nodes[j]), is_dark=self.tr.is_dark(j, now), t=now
+            ).clock_f
         orbital_f = self.f_dark if self.tr.is_dark(j, self.env.now if t is None else t) else 1.0
         return min(orbital_f, self.thermal_f[j])
 
     def thermal_headroom_C(self, j: int) -> float:
         """Temperature margin before the thermal throttle threshold; infinite without a thermal model."""
-        if self.thermal is None:
-            return math.inf
-        return self.thermal.T_throttle_C - self.thermal.temperature(j)
+        return self.power_model.headroom_c(j)
 
     def is_eclipse(self, j: int, t: float | None = None) -> bool:
         """True while node ``j`` is in eclipse (the trace's ``is_dark`` state)."""
@@ -140,6 +153,10 @@ class CoWorld:
 
     def is_hot(self, j: int) -> bool:
         """True while node ``j`` is thermally throttled."""
+        if isinstance(self.power_model, DiscreteTierModel):
+            return self.power_model.operating_point(
+                j, max(1, len(self.nodes[j])), is_dark=self.is_eclipse(j)
+            ).throttled
         return self.thermal_f[j] < 1.0
 
     def is_cool(self, j: int, margin_C: float) -> bool:
@@ -155,8 +172,33 @@ class CoWorld:
         utilization = 1 - (1 - thermal["busy_util_floor"]) * math.exp(-batch / thermal["batch_scale"])
         return power["P_idle"] + (power["P_max"] - power["P_idle"]) * utilization * f**power["gamma"]
 
+    def _sync_discrete_node(self, j: int, prev_batch: int) -> None:
+        if isinstance(self.power_model, DiscreteTierModel):
+            now = self.env.now
+            changed = self.power_model.sync_node(
+                j, now, len(self.nodes[j]), self.tr.is_dark(j, now), prev_batch=prev_batch
+            )
+            self.thermal_f[j] = self.power_model._clock_f[j]
+            self.thermal_power_w[j] = self.power_model._power_w[j]
+            if changed:
+                self.poke(j)
+
     def _thermal_tick(self) -> None:
         now = self.env.now
+        if isinstance(self.power_model, DiscreteTierModel):
+            batches = {j: len(self.nodes[j]) for j in self.tr.compute}
+            changed = self.power_model.step(now, batches, self.tr.is_dark)
+            for j in self.tr.compute:
+                self.thermal_f[j] = self.power_model._clock_f[j]
+                self.thermal_power_w[j] = self.power_model._power_w[j]
+            for j in changed:
+                self.poke(j)
+            diag = self.power_model.diagnostics()
+            self.acc[ACC_ZERO_POWER_S] = diag[ACC_ZERO_POWER_S]
+            self.acc[ACC_TIER_TIME_S] = diag[ACC_TIER_TIME_S]
+            self.acc[ACC_ENERGY_J] = diag[ACC_ENERGY_J]
+            self.acc[ACC_TIER_UNSAT_S] = diag[ACC_TIER_UNSAT_S]
+            return
         self.thermal.advance_with_power(now, self.thermal_power_w)
         for j in self.tr.compute:
             previous = self.f_of(j)
@@ -212,7 +254,7 @@ class CoWorld:
     def _control(self):
         while True:
             yield self.env.timeout(self.period)
-            if self.thermal is not None:
+            if self.thermal is not None or isinstance(self.power_model, DiscreteTierModel):
                 self._thermal_tick()
             self.policy.rebalance(self)
 
@@ -255,7 +297,9 @@ class CoWorld:
         r.trail.append(j)
         r.t_admit = self.env.now
         r.state = "decode"
+        prev_b = len(self.nodes[j])
         self.nodes[j].append(r)
+        self._sync_discrete_node(j, prev_b)
         self.poke(j)
         self.log("admit", req=r.i, node=j)
 
@@ -318,7 +362,9 @@ class CoWorld:
         r.state = "deliver"
         r.t_decoded = self.env.now
         j = r.node
+        prev_b = len(self.nodes[j])
         self.nodes[j].remove(r)
+        self._sync_discrete_node(j, prev_b)
         self.poke(j)
         t_conn = self.tr.next_conn(r.origin, j, self.env.now)
         if t_conn == INF:
@@ -395,11 +441,15 @@ class CoWorld:
             return
         if r.state != "decode" or r.node != src:  # finished at the source meanwhile
             return
+        prev_src = len(self.nodes[src])
         self.nodes[src].remove(r)
+        self._sync_discrete_node(src, prev_src)
         r.node = dst
         r.trail.append(dst)
         r.n_mig += 1
+        prev_dst = len(self.nodes[dst])
         self.nodes[dst].append(r)
+        self._sync_discrete_node(dst, prev_dst)
         self.acc["mig"] += 1
         self.acc["mig_bytes"] += nbytes
         self.log("mig_done", req=r.i, src=src, dst=dst)
