@@ -232,6 +232,7 @@ class DiscreteThermalMigrator(TorchRebalance):
         urgent_isolation: bool = False,
         soft_thermal_gate: bool = False,
         strict_urgent_isolation: bool = False,
+        delivery_aware_tier: bool = False,
         id_override: str | None = None,
     ):
         if placement is None and low_tier_pack and not explicit_tier:
@@ -262,6 +263,7 @@ class DiscreteThermalMigrator(TorchRebalance):
         self.urgent_isolation = bool(urgent_isolation)
         self.soft_thermal_gate = bool(soft_thermal_gate)
         self.strict_urgent_isolation = bool(strict_urgent_isolation)
+        self.delivery_aware_tier = bool(delivery_aware_tier)
         if id_override is not None:
             self.id = str(id_override)
         elif self.explicit_tier:
@@ -574,9 +576,14 @@ class DiscreteThermalMigrator(TorchRebalance):
                                 aft_sc, aft_fn = self._eval_node_for_mig(w, _dst, new_jobs, now + _delay, edge_users)
                                 m_s = aft_sc.pop(_r)
                                 m_f = aft_fn.pop(_r)
-                                b_s = sum(aft_sc[x] - prev_sc[x] for x in prev_jobs)
+                                u_w = 3.0 if self.urgent_isolation else 1.0
+                                r_w = u_w if self._is_urgent(_r, w, now) else 1.0
+                                b_s = sum(
+                                    (u_w if self._is_urgent(x, w, now) else 1.0) * (aft_sc[x] - prev_sc[x])
+                                    for x in prev_jobs
+                                )
                                 b_t = sum(aft_fn[x] - prev_fn[x] for x in prev_jobs)
-                                n_slo = (m_s - _stay_s) + _relief_s + b_s
+                                n_slo = r_w * (m_s - _stay_s) + _relief_s + b_s
                                 n_t = (_stay_f - m_f) + _relief_t - b_t - _link_s
                                 p_d_prev = self._node_power_w(w, _dst, len(prev_jobs), now + _delay)
                                 p_d_new = self._node_power_w(w, _dst, len(new_jobs), now + _delay)
@@ -630,7 +637,8 @@ class DiscreteThermalMigrator(TorchRebalance):
         if not jobs:
             return None
         now = float(w.env.now)
-        if self.urgent_tier_guard and any(self._is_urgent(x, w, now) for x in jobs):
+        live = [x for x in jobs if x.deadline > now]
+        if self.urgent_tier_guard and any(self._is_urgent(x, w, now) for x in (live if self.delivery_aware_tier else jobs)):
             return None
         batch = len(jobs)
         is_dark = bool(w.tr.is_dark(node, now))
@@ -669,6 +677,11 @@ class DiscreteThermalMigrator(TorchRebalance):
         ctx = sum(x.kv + self._est_rem(w, x) / 2.0 for x in jobs)
         if self.eclipse_lookahead_s > 0.0 and cur_t >= spec.t_max_c - 8.0:
             eff_ratio = min(eff_ratio, 0.20) if eff_ratio > 0.0 else 0.20
+
+        has_conn = hasattr(w.tr, "next_conn")
+        high_tier = max(spec.work_tiers, key=lambda t: (t.clock_f, t.power_w))
+        it_high = iter_time(batch, ctx, high_tier.clock_f, w.gpu) if self.delivery_aware_tier else 0.0
+
         for tk in sorted(spec.work_tiers, key=lambda t: (t.power_w, t.index)):
             if tk.max_batch < batch:
                 continue
@@ -676,14 +689,28 @@ class DiscreteThermalMigrator(TorchRebalance):
                 continue
             if alpha * cur_t + offset + gain * tk.power_w > spec.t_max_c + 1e-9:
                 continue
+            if self.delivery_aware_tier and not live:
+                # All resident jobs already missed their deadlines: stop burning high-tier power
+                return tk.index
             it = iter_time(batch, ctx, tk.clock_f, w.gpu)
             all_safe = True
-            for x in jobs:
+            for x in (live if self.delivery_aware_tier else jobs):
                 rem = self._est_rem(w, x)
                 margin = self._tier_margin(x.deadline, now, ratio_override=eff_ratio)
-                if now + rem * it > x.deadline - margin:
-                    all_safe = False
-                    break
+                dec_end = now + rem * it
+                if self.delivery_aware_tier and has_conn and hasattr(x, "origin"):
+                    deliv_tk = w.tr.next_conn(x.origin, node, dec_end)
+                    high_end = now + rem * it_high
+                    deliv_high = w.tr.next_conn(x.origin, node, high_end)
+                    eff_end = deliv_tk if deliv_tk < 1e15 else dec_end
+                    same_contact = deliv_tk < 1e15 and deliv_high < 1e15 and deliv_tk <= deliv_high + 1e-6
+                    if eff_end > x.deadline - margin and not same_contact:
+                        all_safe = False
+                        break
+                else:
+                    if dec_end > x.deadline - margin:
+                        all_safe = False
+                        break
             if all_safe:
                 return tk.index
         return None
@@ -761,6 +788,14 @@ class DiscreteThermalMigrator(TorchRebalance):
                 best_node = j
         return best_node
 
+    def _expected_tokens(self, w, r) -> float:
+        wl = (getattr(w, "cfg", None) or {}).get("workload") or {}
+        key = "long_out" if getattr(r, "long", False) else "short_out"
+        if key in wl:
+            bounds = wl[key]
+            return sum(bounds) / len(bounds)
+        return self._est_rem(w, r)
+
     def _urgent_isolated_place(self, w, r) -> int | None:
         from satsim.cosim.policies import upload_options
 
@@ -775,13 +810,38 @@ class DiscreteThermalMigrator(TorchRebalance):
                 )
             return self._is_urgent(req, w, now)
 
-        if _is_explicit_urg(r):
-            return base_dst
-        if not any(_is_explicit_urg(x) for x in w.nodes[base_dst]):
-            return base_dst
         if not hasattr(self.placement, "_delivery"):
             return base_dst
-        tokens = w.expected_tokens(r)
+        is_urg = _is_explicit_urg(r)
+        tokens = self._expected_tokens(w, r)
+
+        if is_urg:
+            if not self.delivery_aware_tier:
+                return base_dst
+            spec = self._spec(w)
+            pm = getattr(w, "power_model", None)
+            t_ceil = (spec.t_max_c - 4.0) if spec is not None else 1e9
+            base_has_norm = any(not _is_explicit_urg(x) for x in w.nodes[base_dst])
+            base_hot = (float(pm.temperature(base_dst)) >= t_ceil) if pm is not None else False
+            if not base_has_norm and not base_hot:
+                return base_dst
+            best_score = None
+            best_node: int | None = None
+            for j, upload_s in upload_options(w, r):
+                fin = self.placement._delivery(w, r, tokens, j, upload_s)
+                if fin > r.deadline:
+                    continue
+                has_norm = 1 if any(not _is_explicit_urg(x) for x in w.nodes[j]) else 0
+                is_hot = 1 if (pm is not None and float(pm.temperature(j)) >= t_ceil) else 0
+                wakes_0w = 1 if len(w.nodes[j]) == 0 else 0
+                score = (has_norm, is_hot, wakes_0w, fin, j)
+                if best_score is None or score < best_score:
+                    best_score = score
+                    best_node = j
+            return best_node if best_node is not None else base_dst
+
+        if not any(_is_explicit_urg(x) for x in w.nodes[base_dst]):
+            return base_dst
         best_score = None
         best_node: int | None = None
         for j, upload_s in upload_options(w, r):

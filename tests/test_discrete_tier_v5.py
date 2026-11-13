@@ -120,3 +120,38 @@ def test_v6_factory_and_soft_thermal_gate():
     w_hot = _make_mock_world(cur_temp=73.0, dark_after_s=None)
     w_hot.nodes[0][0].deadline = 950.0
     assert pol._select_explicit_tier_for_node(w_hot, 0) == 1
+
+
+def test_v7_delivery_aware_tier_same_contact_and_dead_jobs():
+    pol = make_policy({"policy": "discrete_rh_tier_v7"})
+    assert pol.id == "discrete_rh_tier_v7"
+    w = _make_mock_world(cur_temp=40.0, dark_after_s=None)
+    # Same next contact window (t=900.0) regardless of whether decode finishes at high or low tier
+    w.tr.next_conn = lambda orig, node, t: 900.0 if t <= 800.0 else 1500.0
+    w.nodes[0][0].origin = 0
+    w.nodes[0][0].deadline = 1200.0
+    assert pol._select_explicit_tier_for_node(w, 0) == 1
+
+    # Already-missed deadline -> drop to low tier (1) to stop burning 300W
+    w.env.now = 1300.0
+    assert pol._select_explicit_tier_for_node(w, 0) == 1
+
+
+def test_v5_v6_v7_real_coworld_mixed_criticality_smoke():
+    import copy
+    from pathlib import Path
+    from satsim.cosim.record import summarize
+    from satsim.cosim.run import load_config, run_one
+    from satsim.cosim.trace import Trace
+
+    cfg = load_config(Path("configs/cosim_discrete_power_w53_v1.yaml"))
+    cfg["workload"]["arrival_window_s"] = 240
+    cfg["slo"]["urgent_frac"] = 0.25
+    cfg["slo"]["urgent_deadline_factor_long"] = 1.55
+    cfg["slo"]["deadline_factor_long"] = 2.60
+    tr = Trace.load(Path(cfg["_dir"]) / cfg["trace"])
+    for pol_name in ("discrete_rh_tier_v5", "discrete_rh_tier_v6", "discrete_rh_tier_v7"):
+        w, _ = run_one(copy.deepcopy(cfg), tr, {"policy": pol_name}, seed=11, record=False)
+        s = summarize(w)
+        assert s["n_urgent"] > 0
+        assert 0.0 <= s["good_long_frac"] <= 1.0
