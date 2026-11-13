@@ -62,6 +62,6 @@ def test_v5_factory_and_thermal_gate():
     w_hot = _make_mock_world(cur_temp=73.0, dark_after_s=None)
     assert pol._select_explicit_tier_for_node(w_hot, 0) == 1
 
-    # Cool node approaching eclipse within 30s: eclipse gate opens -> low tier (index 1)
+    # Cool node approaching eclipse within 30s: pre-eclipse sprint stays on high tier (None)
     w_ecl = _make_mock_world(cur_temp=40.0, dark_after_s=20.0)
-    assert pol._select_explicit_tier_for_node(w_ecl, 0) == 1
+    assert pol._select_explicit_tier_for_node(w_ecl, 0) is None

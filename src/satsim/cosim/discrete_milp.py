@@ -631,9 +631,7 @@ class DiscreteThermalMigrator(TorchRebalance):
             return None
         alpha, offset, gain = pm._rc_probe_coeffs
         if self.thermal_precool_horizon_s > 0.0:
-            # Gate proactive low-tier pre-cooling: only step down when approaching thermal cap or eclipse.
-            high_power = max(t.power_w for t in spec.work_tiers)
-            eclipse_gate = approaching_dark and spec.p_dark_w < high_power - 1e-9
+            # Gate proactive low-tier pre-cooling: only step down when approaching thermal cap.
             thermal_gate = cur_t >= spec.t_max_c - 4.0
             if not thermal_gate and hasattr(pm, "advance_temp"):
                 saved = pm._explicit_tier_idx[node]
@@ -643,7 +641,7 @@ class DiscreteThermalMigrator(TorchRebalance):
                 finally:
                     pm.set_explicit_tier(node, saved)
                 thermal_gate = t_proj >= spec.t_max_c - 2.0
-            if not (eclipse_gate or thermal_gate):
+            if not thermal_gate:
                 return None
         ctx = sum(x.kv + self._est_rem(w, x) / 2.0 for x in jobs)
         eff_ratio = self.tier_slack_ratio
