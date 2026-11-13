@@ -742,26 +742,30 @@ class DiscreteThermalMigrator(TorchRebalance):
     def _urgent_isolated_place(self, w, r) -> int | None:
         from satsim.cosim.policies import upload_options
 
+        base_dst = super().place(w, r)
+        if base_dst is None:
+            return None
         now = float(w.env.now)
-        is_urg = self._is_urgent(r)
+        if self._is_urgent(r, w, now):
+            return base_dst
+        if not any(self._is_urgent(x, w, now) for x in w.nodes[base_dst]):
+            return base_dst
+        if not hasattr(self.placement, "_delivery"):
+            return base_dst
+        tokens = w.expected_tokens(r)
         best_score = None
         best_node: int | None = None
         for j, upload_s in upload_options(w, r):
-            start = now + upload_s
-            dark = bool(w.tr.is_dark(j, start))
-            has_urg = any(self._is_urgent(x) for x in w.nodes[j])
-            load = len(w.nodes[j]) + (1 if w.reserved[j] > 0 else 0)
-            temp_c = self._node_temp_c(w, j)
-            if is_urg:
-                # Urgent requests prefer sunlit, low-load, cool, and already-warmed (or low-temp) nodes.
-                score = (dark, load, temp_c, upload_s, j)
-            else:
-                # Normal requests avoid nodes currently running urgent requests unless no other node fits.
-                score = (has_urg, dark, load, temp_c, upload_s, j)
+            if any(self._is_urgent(x, w, now) for x in w.nodes[j]):
+                continue
+            fin = self.placement._delivery(w, r, tokens, j, upload_s)
+            if fin > r.deadline:
+                continue
+            score = (fin, len(w.nodes[j]), j)
             if best_score is None or score < best_score:
                 best_score = score
                 best_node = j
-        return best_node
+        return best_node if best_node is not None else base_dst
 
     def place(self, w, r):
         if self.low_tier_pack:
