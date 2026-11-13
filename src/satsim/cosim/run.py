@@ -9,8 +9,10 @@ workload and the policies to compare. Every policy sees the same arrivals for a 
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import copy
 import json
+import os
 import statistics as st
 import sys
 import time
@@ -114,32 +116,61 @@ def run_one(cfg: dict, trace: Trace, pol_spec: dict, seed: int, record: bool = F
     return w, rec
 
 
-def run(cfg: dict, viz_dir: Path | None = None, quiet: bool = False) -> dict:
-    trace = Trace.load(_resolve(cfg, "trace"))
+_COSIM_TRACE_CACHE: dict[str, Trace] = {}
+
+
+def _run_cosim_task(task: tuple[dict, str, str, dict, int, bool, float]):
+    cfg, trace_path, name, spec, seed, record, frame_s = task
+    trace = _COSIM_TRACE_CACHE.get(trace_path)
+    if trace is None:
+        trace = Trace.load(trace_path)
+        _COSIM_TRACE_CACHE[trace_path] = trace
+    t0 = time.perf_counter()
+    w, rec = run_one(cfg, trace, spec, seed, record=record)
+    row = {"policy": name, "seed": seed, **summarize(w), "wall_s": time.perf_counter() - t0}
+    pb = None
+    if rec is not None:
+        pb = {
+            "summary": row,
+            "frames": rec.frames,
+            # arrive/admit are implied by upload; the viewer draws paths, not every state
+            "events": [e for e in rec.events if e[1] not in ("arrive", "admit")],
+            "good_curve": cumulative_good(w, frame_s * 3),
+        }
+        if cfg.get("playback_requests", False):
+            pb["requests"] = request_table(w)
+    return row, pb
+
+
+def run(cfg: dict, viz_dir: Path | None = None, quiet: bool = False, jobs: int = 1) -> dict:
+    trace_path = str(_resolve(cfg, "trace"))
+    trace = Trace.load(trace_path)
     seeds = [int(s) for s in cfg["seeds"]]
     rec_seed = int(cfg.get("record_seed", seeds[0]))
+    frame_s = float(cfg.get("frame_s", 10.0))
+    tasks = [
+        (cfg, trace_path, name, spec, seed, (seed == rec_seed and viz_dir is not None), frame_s)
+        for name, spec in cfg["policies"].items()
+        for seed in seeds
+    ]
+    n_workers = (os.cpu_count() or 1) if jobs == 0 else max(1, jobs)
+    n_workers = min(n_workers, max(1, len(tasks)))
     rows, playback_runs = [], {}
-    for name, spec in cfg["policies"].items():
-        for seed in seeds:
-            t0 = time.perf_counter()
-            w, rec = run_one(cfg, trace, spec, seed, record=(seed == rec_seed and viz_dir is not None))
-            row = {"policy": name, "seed": seed, **summarize(w), "wall_s": time.perf_counter() - t0}
-            rows.append(row)
-            if not quiet:
-                print(f"  {name:14} seed={seed}  good={row['good']}/{row['n_req']}"
-                      f"  good_long={row['good_long']}/{row['n_long']}  mig={row['migrations']}"
-                      f"  abort={row['mig_abort']}  dark_tok={row['dark_tok_share']:.2f}"
-                      f"  ({row['wall_s']:.1f}s)")
-            if rec is not None:
-                playback_runs[name] = {
-                    "summary": row,
-                    "frames": rec.frames,
-                    # arrive/admit are implied by upload; the viewer draws paths, not every state
-                    "events": [e for e in rec.events if e[1] not in ("arrive", "admit")],
-                    "good_curve": cumulative_good(w, float(cfg.get("frame_s", 10.0)) * 3),
-                }
-                if cfg.get("playback_requests", False):
-                    playback_runs[name]["requests"] = request_table(w)
+    if n_workers <= 1 or len(tasks) <= 1:
+        _COSIM_TRACE_CACHE[trace_path] = trace
+        results = [_run_cosim_task(t) for t in tasks]
+    else:
+        with concurrent.futures.ProcessPoolExecutor(max_workers=n_workers) as pool:
+            results = list(pool.map(_run_cosim_task, tasks))
+    for row, pb in results:
+        rows.append(row)
+        if not quiet:
+            print(f"  {row['policy']:14} seed={row['seed']}  good={row['good']}/{row['n_req']}"
+                  f"  good_long={row['good_long']}/{row['n_long']}  mig={row['migrations']}"
+                  f"  abort={row['mig_abort']}  dark_tok={row['dark_tok_share']:.2f}"
+                  f"  ({row['wall_s']:.1f}s)")
+        if pb is not None:
+            playback_runs[row["policy"]] = pb
     table = {}
     for name in cfg["policies"]:
         rs = [r for r in rows if r["policy"] == name]
@@ -230,6 +261,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--out", default="")
     ap.add_argument("--viz", default="", help="directory for the viewer playback JSON")
     ap.add_argument("--set", action="append", default=[], help="override, e.g. workload.rate_per_rs_per_min=8")
+    ap.add_argument("--jobs", "-j", type=int, default=0,
+                    help="Process pool workers (0 = auto cpu_count, 1 = serial)")
     ap.add_argument("--provenance-only", action="store_true",
                     help="print the provenance a fresh run would record, as JSON, and exit")
     args = ap.parse_args(argv)
@@ -238,7 +271,7 @@ def main(argv: list[str] | None = None) -> None:
         print(json.dumps(provenance(cfg)))
         return
     print(f"{cfg['name']}  delivery={cfg['delivery']}")
-    payload = run(cfg, Path(args.viz) if args.viz else None)
+    payload = run(cfg, Path(args.viz) if args.viz else None, jobs=args.jobs)
     dest = Path(args.out) if args.out else Path("runs") / cfg["name"]
     dest.mkdir(parents=True, exist_ok=True)
     (dest / "summary.json").write_text(json.dumps(payload, indent=1, ensure_ascii=False), encoding="utf-8")

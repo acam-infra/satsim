@@ -89,6 +89,38 @@ class CRequest:
         return self.gen + min(self.remaining, max(0.0, now - start) / iteration)
 
 
+class _TrackedNodeList(list):
+    """List of resident requests on a node that maintains ``reserved_tokens_sum`` in O(1)."""
+
+    __slots__ = ("reserved_tokens_sum",)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.reserved_tokens_sum = 0
+
+    def append(self, r: CRequest) -> None:
+        super().append(r)
+        self.reserved_tokens_sum += r.reserved_tokens
+
+    def extend(self, items) -> None:
+        items_list = list(items)
+        super().extend(items_list)
+        self.reserved_tokens_sum += sum(r.reserved_tokens for r in items_list)
+
+    def remove(self, r: CRequest) -> None:
+        super().remove(r)
+        self.reserved_tokens_sum -= r.reserved_tokens
+
+    def pop(self, index: int = -1):
+        r = super().pop(index)
+        self.reserved_tokens_sum -= r.reserved_tokens
+        return r
+
+    def clear(self) -> None:
+        super().clear()
+        self.reserved_tokens_sum = 0
+
+
 class CoWorld:
     def __init__(self, env: simpy.Environment, trace: Trace, cfg: dict, policy, recorder=None, seed: int = 0):
         self.env = env
@@ -110,7 +142,7 @@ class CoWorld:
         self.max_delta_kv_rounds = 2
         self.period = float(cfg["control_period_s"])
         self.stream = cfg["delivery"] == "stream"
-        self.nodes: dict[int, list[CRequest]] = {j: [] for j in trace.compute}
+        self.nodes: dict[int, _TrackedNodeList] = {j: _TrackedNodeList() for j in trace.compute}
         self.reserved = {j: 0.0 for j in trace.compute}  # KV bytes of inbound uploads / migrations
         self.reqs: list[CRequest] = []
         self.topo_event = env.event()
@@ -170,7 +202,7 @@ class CoWorld:
 
     def kv_used(self, j: int) -> float:
         """Bytes committed on j: each resident request's KV at completion, plus inbound reservations."""
-        return sum(r.reserved_tokens for r in self.nodes[j]) * self.bpt + self.reserved[j]
+        return self.nodes[j].reserved_tokens_sum * self.bpt + self.reserved[j]
 
     def fits(self, j: int, r: CRequest) -> bool:
         return self.kv_used(j) + r.reserved_tokens * self.bpt <= self.kv_cap

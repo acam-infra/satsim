@@ -32,7 +32,7 @@ MAX_MIG_PER_REQ = 2
 def candidates(w, r) -> list[int]:
     """Compute nodes reachable from the request's origin now, with KV room."""
     t = w.env.now
-    return [j for j in w.tr.compute if w.tr.connected(r.origin, j, t) and w.fits(j, r)]
+    return [j for j in w.tr.compute if w.fits(j, r) and w.tr.connected(r.origin, j, t)]
 
 
 _HOP_CACHE: dict[tuple[int, int, int], list[int]] = {}
@@ -170,14 +170,17 @@ class LeastReservedKV(Greedy):
 
 def upload_options(w, r):
     """Currently feasible nodes and their upload ETA under a snapshot of link sharing."""
+    cs = candidates(w, r)
+    if not cs:
+        return
     now = w.env.now
-    users = Counter(e for flow in w.net.flows for _, _, e in flow.hops)
-    for j in candidates(w, r):
+    users = Counter(e for flow in w.net.flows for _, _, e in flow.hops) if w.net.flows else {}
+    for j in cs:
         path = w.tr.path(r.origin, j, now)
         if path is None:
             continue
         edges = path[1]
-        bw = min(w.net.cap[e] / (users[e] + 1) for e in edges)
+        bw = min(w.net.cap[e] / (users.get(e, 0) + 1) for e in edges)
         duration = r.upload_bytes / bw + w.hop_lat * len(edges)
         if path_lifetime(w, path) >= now + duration:
             yield j, duration

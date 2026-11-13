@@ -212,10 +212,20 @@ def _interp_linear(x: float, xs: list[float], ys: list[float]) -> float:
 def k_shortest_paths(
     trace, s: int, d: int, t: float, k: int = 3, max_hops: int = 6
 ) -> list[tuple[list[int], list[int]]]:
-    """Up to k simple paths at time t avoiding intermediate RS nodes."""
+    """Up to k simple paths at time t avoiding intermediate RS nodes (cached per epoch)."""
+    cache = getattr(trace, "_k_path_cache", None)
+    if cache is None:
+        cache = {}
+        trace._k_path_cache = cache
+    key = (trace.epoch_index(t), s, d, k, max_hops)
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
     p0 = trace.path(s, d, t)
     if p0 is None or not p0[1]:
-        return [] if p0 is None else [p0]
+        paths = [] if p0 is None else [p0]
+        cache[key] = paths
+        return paths
     paths = [p0]
     if k <= 1:
         return paths
@@ -247,6 +257,7 @@ def k_shortest_paths(
             cand = (nodes[::-1], eids[::-1])
             if len(cand[1]) <= max_hops and cand not in paths:
                 paths.append(cand)
+    cache[key] = paths
     return paths
 
 
