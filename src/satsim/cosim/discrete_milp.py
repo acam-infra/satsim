@@ -230,6 +230,8 @@ class DiscreteThermalMigrator(TorchRebalance):
         eclipse_lookahead_s: float = 0.0,
         thermal_precool_horizon_s: float = 0.0,
         urgent_isolation: bool = False,
+        soft_thermal_gate: bool = False,
+        strict_urgent_isolation: bool = False,
         id_override: str | None = None,
     ):
         if placement is None and low_tier_pack and not explicit_tier:
@@ -258,10 +260,14 @@ class DiscreteThermalMigrator(TorchRebalance):
         self.eclipse_lookahead_s = float(eclipse_lookahead_s)
         self.thermal_precool_horizon_s = float(thermal_precool_horizon_s)
         self.urgent_isolation = bool(urgent_isolation)
+        self.soft_thermal_gate = bool(soft_thermal_gate)
+        self.strict_urgent_isolation = bool(strict_urgent_isolation)
         if id_override is not None:
             self.id = str(id_override)
         elif self.explicit_tier:
-            if self.thermal_precool_horizon_s > 0.0 or self.urgent_isolation:
+            if self.soft_thermal_gate or self.strict_urgent_isolation:
+                self.id = "discrete_rh_tier_v6"
+            elif self.thermal_precool_horizon_s > 0.0 or self.urgent_isolation:
                 self.id = "discrete_rh_tier_v5"
             elif self.eclipse_lookahead_s > 0.0:
                 self.id = "discrete_rh_tier_v4"
@@ -511,6 +517,9 @@ class DiscreteThermalMigrator(TorchRebalance):
 
                     if not self._check_thermal_safe(w, dst, [*w.nodes[dst], r], now + delay):
                         continue
+                    if self.strict_urgent_isolation and not self._is_urgent(r, w, now):
+                        if any(self._is_urgent(x, w, now) for x in w.nodes[dst]):
+                            continue
 
                     feasible += 1
                     n_d = len(w.nodes[dst])
@@ -640,6 +649,7 @@ class DiscreteThermalMigrator(TorchRebalance):
         ):
             return None
         alpha, offset, gain = pm._rc_probe_coeffs
+        eff_ratio = self.tier_slack_ratio
         if self.thermal_precool_horizon_s > 0.0:
             # Gate proactive low-tier pre-cooling: only step down when approaching thermal cap.
             thermal_gate = cur_t >= spec.t_max_c - 4.0
@@ -652,9 +662,11 @@ class DiscreteThermalMigrator(TorchRebalance):
                     pm.set_explicit_tier(node, saved)
                 thermal_gate = t_proj >= spec.t_max_c - 2.0
             if not thermal_gate:
-                return None
+                if not self.soft_thermal_gate:
+                    return None
+            elif self.soft_thermal_gate:
+                eff_ratio = min(eff_ratio, 0.15) if eff_ratio > 0.0 else 0.15
         ctx = sum(x.kv + self._est_rem(w, x) / 2.0 for x in jobs)
-        eff_ratio = self.tier_slack_ratio
         if self.eclipse_lookahead_s > 0.0 and cur_t >= spec.t_max_c - 8.0:
             eff_ratio = min(eff_ratio, 0.20) if eff_ratio > 0.0 else 0.20
         for tk in sorted(spec.work_tiers, key=lambda t: (t.power_w, t.index)):
@@ -756,9 +768,16 @@ class DiscreteThermalMigrator(TorchRebalance):
         if base_dst is None:
             return None
         now = float(w.env.now)
-        if self._is_urgent(r, w, now):
+        def _is_explicit_urg(req) -> bool:
+            if self.strict_urgent_isolation:
+                return bool(getattr(req, "urgent", False)) or (
+                    str(getattr(req, "criticality", "")).lower() in ("hi", "high", "urgent", "critical")
+                )
+            return self._is_urgent(req, w, now)
+
+        if _is_explicit_urg(r):
             return base_dst
-        if not any(self._is_urgent(x, w, now) for x in w.nodes[base_dst]):
+        if not any(_is_explicit_urg(x) for x in w.nodes[base_dst]):
             return base_dst
         if not hasattr(self.placement, "_delivery"):
             return base_dst
@@ -766,7 +785,7 @@ class DiscreteThermalMigrator(TorchRebalance):
         best_score = None
         best_node: int | None = None
         for j, upload_s in upload_options(w, r):
-            if any(self._is_urgent(x, w, now) for x in w.nodes[j]):
+            if any(_is_explicit_urg(x) for x in w.nodes[j]):
                 continue
             fin = self.placement._delivery(w, r, tokens, j, upload_s)
             if fin > r.deadline:

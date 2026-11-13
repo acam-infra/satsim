@@ -38,6 +38,7 @@ POLICIES = {
     "discrete_rh_greedy": {"policy": "discrete_rh_greedy", "placement": {"policy": "orbit_load"}},
     "discrete_rh_tier_v4": {"policy": "discrete_rh_tier_v4"},
     "discrete_rh_tier_v5": {"policy": "discrete_rh_tier_v5"},
+    "discrete_rh_tier_v6": {"policy": "discrete_rh_tier_v6"},
 }
 
 

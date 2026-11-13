@@ -47,6 +47,7 @@ POLICIES = {
     "discrete_rh_tier_v3": {"policy": "discrete_rh_tier_v3"},
     "discrete_rh_tier_v4": {"policy": "discrete_rh_tier_v4"},
     "discrete_rh_tier_v5": {"policy": "discrete_rh_tier_v5"},
+    "discrete_rh_tier_v6": {"policy": "discrete_rh_tier_v6"},
 }
 
 

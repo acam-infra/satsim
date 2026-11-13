@@ -104,3 +104,19 @@ def test_is_urgent_dynamic_fallback_when_explicit_false():
     w = _make_mock_world(cur_temp=40.0)
     req_false = SimpleNamespace(long=True, pin=1000, pout=2000, gen=0, remaining=2000, kv=1000, deadline=5.0, urgent=False)
     assert pol._is_urgent(req_false, w, now=0.0) is True
+
+
+def test_v6_factory_and_soft_thermal_gate():
+    pol = make_policy({"policy": "discrete_rh_tier_v6"})
+    assert isinstance(pol, DiscreteThermalMigrator)
+    assert pol.id == "discrete_rh_tier_v6"
+
+    # Cool sunlit node with generous slack: v6 proactively selects low tier (index 1)
+    w_cool = _make_mock_world(cur_temp=40.0, dark_after_s=None)
+    assert pol._select_explicit_tier_for_node(w_cool, 0) == 1
+
+    # Hot sunlit node near T_max_C where 0.20 margin is too tight for low tier,
+    # but soft_thermal_gate relaxes eff_ratio to 0.15 so it still steps down to avoid Thermal Trip lockout.
+    w_hot = _make_mock_world(cur_temp=73.0, dark_after_s=None)
+    w_hot.nodes[0][0].deadline = 950.0
+    assert pol._select_explicit_tier_for_node(w_hot, 0) == 1
